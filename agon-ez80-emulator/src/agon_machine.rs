@@ -1460,7 +1460,6 @@ impl AgonMachine {
             //if pc == self.mos_map._f_getfree { eprintln!("Un-trapped fatfs call: f_getfree"); }
             //if pc == self.mos_map._f_printf { eprintln!("Un-trapped fatfs call: f_printf"); }
             //if pc == self.mos_map._f_sync { eprintln!("Un-trapped fatfs call: f_sync"); }
-            //if pc == self.mos_map._f_truncate { eprintln!("Un-trapped fatfs call: f_truncate"); }
         }
 
         self.cycle_counter.set(0);
