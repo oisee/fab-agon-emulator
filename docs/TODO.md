@@ -1,18 +1,20 @@
 # TODO
 
+## v1.3+
+- [ ] Read ini file. there are so many options now...
+- [ ] symbol support in debugger?
+- [ ] gdbserver support?
+
 ## v1.1
 - [ ] Test joysticks
 - [ ] --renderer does nothing now...
-
-## Known bugs
-- [ ] Mixed mode push ((ismixed<<1) | isadl) to stack. I haven't implemented the ismixed part
-- [ ] c8 joystick gpio mutex contention on windows -- probably use atomics instead
-- [ ] ez80f92 PRT gpio-b pin 1 source (vblank) not implemented
-- [ ] hostfs should accept filename/paths terminated by any character <= 0x1f
-- [ ] SLL opcode is a trap on ez80! emulator accepts it erroneously
+- [ ] interrupt handling optimisation
 
 ## EZ80 flaws and omissions
-- [ ] ldir, otirx, etc have wrong timing
+- [ ] Mixed mode push ((ismixed<<1) | isadl) to stack. I haven't implemented the ismixed part
+- [ ] SLL opcode is a trap on ez80! emulator accepts it erroneously
+- [ ] ez80f92 PRT gpio-b pin 1 source (vblank) not implemented
+- [ ] ldir has wrong timing of first/last iteration (needs otirx fix)
 - [ ] memory wait states are not honoured
 
 ## VDP flaws and omissions
@@ -22,8 +24,3 @@
 - [ ] PAUSE key is subject to key repeat, which it is not on a real agon.
 - [ ] Copper effects not implemented
 - [ ] Hardware sprites not implemented
-
-## Feature ideas
-- [ ] symbol support in debugger
-- [ ] uart1 host serial link (some work done but untested)
-- [ ] gdbserver support?
