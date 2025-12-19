@@ -21,7 +21,7 @@ OPTIONS:
   --scale 4:3           (default) Scale Agon screen to 4:3 aspect ratio
   --scale integer       Scale Agon screen to an integer multiple
   --scale stretch       Scale Agon screen to full window size
-  --border #rrggbb      Colour of border around Agon screen (default #000000)
+  --border rrggbb       Colour of border around Agon screen (default 000000)
 
 ADVANCED:
   --mos PATH            Use a different MOS.bin firmware
@@ -132,7 +132,7 @@ pub fn parse_args() -> Result<AppArgs, pico_args::Error> {
         border: match u32::from_str_radix(border.as_str(), 16) {
             Ok(v) => v,
             Err(_) => {
-                println!("Error parsing --border colour. Expected hex colour, eg #ff0070");
+                println!("Error parsing --border colour. Expected hex colour, eg ff0070");
                 std::process::exit(0);
             }
         },
