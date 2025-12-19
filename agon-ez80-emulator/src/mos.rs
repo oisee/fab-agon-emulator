@@ -127,17 +127,19 @@ impl MosMap {
 }
 
 /**
- * Like z80_mem_tools::get_cstring, except \r and \n are accepted as
+ * Like z80_mem_tools::get_cstring, any char < 32 is accepted as
  * string terminators as well as \0
  */
 pub fn get_mos_path_string<M: Machine>(machine: &M, address: u32) -> Vec<u8> {
     let mut s: Vec<u8> = vec![];
     let mut ptr = address;
 
-    loop {
-        match machine.peek(ptr) {
-            0 | 10 | 13 => break,
-            b => s.push(b),
+    for _ in 0..256 {
+        let b = machine.peek(ptr);
+        if b < 32 {
+            break;
+        } else {
+            s.push(b);
         }
         ptr += 1;
     }
