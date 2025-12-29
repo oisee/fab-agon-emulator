@@ -332,6 +332,17 @@ fn main() {
         });
     };
 
+    std::thread::spawn(move || {
+        // just ignore gpio video frames
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            match rx_gpio_vga_frame.recv() {
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+    });
+
     start_vdp(
         tx_vdp_to_ez80,
         rx_ez80_to_vdp,
