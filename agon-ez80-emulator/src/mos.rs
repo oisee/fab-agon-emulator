@@ -130,7 +130,7 @@ impl MosMap {
  * Like z80_mem_tools::get_cstring, any char < 32 is accepted as
  * string terminators as well as \0
  */
-pub fn get_mos_path_string<M: Machine>(machine: &M, address: u32) -> Vec<u8> {
+pub fn get_mos_path_string<M: Machine>(machine: &M, address: u32) -> String {
     let mut s: Vec<u8> = vec![];
     let mut ptr = address;
 
@@ -143,5 +143,5 @@ pub fn get_mos_path_string<M: Machine>(machine: &M, address: u32) -> Vec<u8> {
         }
         ptr += 1;
     }
-    s
+    String::from_utf8(s).unwrap_or("".to_string())
 }

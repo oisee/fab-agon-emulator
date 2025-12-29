@@ -980,12 +980,7 @@ impl AgonMachine {
     }
 
     fn hostfs_mos_f_mkdir(&mut self, cpu: &mut Cpu) {
-        let dir_name = unsafe {
-            String::from_utf8_unchecked(mos::get_mos_path_string(
-                self,
-                self._peek24(cpu.state.sp() + 3),
-            ))
-        };
+        let dir_name = mos::get_mos_path_string(self, self._peek24(cpu.state.sp() + 3));
         //eprintln!("f_mkdir(\"{}\")", dir_name);
 
         match std::fs::create_dir(self.host_path_from_mos_path_join(&dir_name)) {
@@ -1015,18 +1010,8 @@ impl AgonMachine {
     }
 
     fn hostfs_mos_f_rename(&mut self, cpu: &mut Cpu) {
-        let old_name = unsafe {
-            String::from_utf8_unchecked(mos::get_mos_path_string(
-                self,
-                self._peek24(cpu.state.sp() + 3),
-            ))
-        };
-        let new_name = unsafe {
-            String::from_utf8_unchecked(mos::get_mos_path_string(
-                self,
-                self._peek24(cpu.state.sp() + 6),
-            ))
-        };
+        let old_name = mos::get_mos_path_string(self, self._peek24(cpu.state.sp() + 3));
+        let new_name = mos::get_mos_path_string(self, self._peek24(cpu.state.sp() + 6));
         //eprintln!("f_rename(\"{}\", \"{}\")", old_name, new_name);
 
         match std::fs::rename(
@@ -1051,10 +1036,7 @@ impl AgonMachine {
 
     fn hostfs_mos_f_chdir(&mut self, cpu: &mut Cpu) {
         let cd_to_ptr = self._peek24(cpu.state.sp() + 3);
-        let cd_to = unsafe {
-            // MOS filenames may not be valid utf-8
-            String::from_utf8_unchecked(mos::get_mos_path_string(self, cd_to_ptr))
-        };
+        let cd_to = mos::get_mos_path_string(self, cd_to_ptr);
         //eprintln!("f_chdir({})", cd_to);
 
         let new_path = self.mos_path_join(&cd_to);
@@ -1090,7 +1072,7 @@ impl AgonMachine {
     fn hostfs_mos_f_unlink(&mut self, cpu: &mut Cpu) {
         let path_str = {
             let ptr = self._peek24(cpu.state.sp() + 3);
-            unsafe { String::from_utf8_unchecked(mos::get_mos_path_string(self, ptr)) }
+            mos::get_mos_path_string(self, ptr)
         };
         let mut path = self.host_path_from_mos_path_join(&path_str);
         // eprintln!("f_unlink(\"{}\")", path_str);
@@ -1143,10 +1125,7 @@ impl AgonMachine {
         //fr = f_opendir(&dir, path);
         let dir_ptr = self._peek24(cpu.state.sp() + 3);
         let path_ptr = self._peek24(cpu.state.sp() + 6);
-        let path = unsafe {
-            // MOS filenames may not be valid utf-8
-            String::from_utf8_unchecked(mos::get_mos_path_string(self, path_ptr))
-        };
+        let path = mos::get_mos_path_string(self, path_ptr);
         //eprintln!("f_opendir(${:x}, \"{}\")", dir_ptr, path.trim_end());
 
         match std::fs::read_dir(self.host_path_from_mos_path_join(&path)) {
@@ -1291,7 +1270,7 @@ impl AgonMachine {
     fn hostfs_mos_f_stat(&mut self, cpu: &mut Cpu) {
         let path_str = {
             let ptr = self._peek24(cpu.state.sp() + 3);
-            unsafe { String::from_utf8_unchecked(mos::get_mos_path_string(self, ptr)) }
+            mos::get_mos_path_string(self, ptr)
         };
         let filinfo_ptr = self._peek24(cpu.state.sp() + 6);
         let mut path = self.host_path_from_mos_path_join(&path_str);
@@ -1340,7 +1319,7 @@ impl AgonMachine {
         let filename = {
             let ptr = self._peek24(cpu.state.sp() + 6);
             // MOS filenames may not be valid utf-8
-            unsafe { String::from_utf8_unchecked(mos::get_mos_path_string(self, ptr)) }
+            mos::get_mos_path_string(self, ptr)
         };
         let path = self.mos_path_join(&filename);
         let mode = self._peek24(cpu.state.sp() + 9);
