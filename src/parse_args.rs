@@ -81,7 +81,7 @@ pub struct AppArgs {
     pub uart1_device: Option<String>,
     pub uart1_baud: Option<u32>,
     pub alternative_hostkey: bool,
-    pub caps_as_ctrl: bool,
+    pub swap_caps_and_ctrl: bool,
 }
 
 pub fn parse_args() -> Result<AppArgs, pico_args::Error> {
@@ -130,7 +130,7 @@ pub fn parse_args() -> Result<AppArgs, pico_args::Error> {
         verbose: pargs.contains("--verbose"),
         zero: pargs.contains(["-z", "--zero"]),
         osk: pargs.contains("--osk"),
-        caps_as_ctrl: pargs.contains("--caps-as-ctrl"),
+        swap_caps_and_ctrl: pargs.contains("--swap-caps-and-ctrl"),
         scr_mode: pargs.opt_value_from_str("--mode")?,
         border: match u32::from_str_radix(border.as_str(), 16) {
             Ok(v) => v,

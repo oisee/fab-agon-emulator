@@ -44,7 +44,7 @@ pub fn is_not_ascii(scancode: sdl3::keyboard::Scancode) -> bool {
 /**
  * Convert SDL scancodes to PS/2 set 2 scancodes.
  */
-pub fn sdl2ps2(scancode: sdl3::keyboard::Scancode, opt_caps_as_ctrl: bool) -> u16 {
+pub fn sdl2ps2(scancode: sdl3::keyboard::Scancode, opt_swap_caps_and_ctrl: bool) -> u16 {
     match scancode {
         sdl3::keyboard::Scancode::Grave => 0x0e,
         sdl3::keyboard::Scancode::_1 => 0x16,
@@ -74,7 +74,7 @@ pub fn sdl2ps2(scancode: sdl3::keyboard::Scancode, opt_caps_as_ctrl: bool) -> u1
         sdl3::keyboard::Scancode::LeftBracket => 0x54,
         sdl3::keyboard::Scancode::RightBracket => 0x5b,
         sdl3::keyboard::Scancode::CapsLock => {
-            if opt_caps_as_ctrl {
+            if opt_swap_caps_and_ctrl {
                 0x14
             } else {
                 0x58
@@ -104,7 +104,13 @@ pub fn sdl2ps2(scancode: sdl3::keyboard::Scancode, opt_caps_as_ctrl: bool) -> u1
         sdl3::keyboard::Scancode::Period => 0x49,
         sdl3::keyboard::Scancode::Slash => 0x4a,
         sdl3::keyboard::Scancode::RShift => 0x59,
-        sdl3::keyboard::Scancode::LCtrl => 0x14,
+        sdl3::keyboard::Scancode::LCtrl => {
+            if opt_swap_caps_and_ctrl {
+                0x58
+            } else {
+                0x14
+            }
+        }
         sdl3::keyboard::Scancode::LAlt => 0x11,
         sdl3::keyboard::Scancode::Space => 0x29,
         sdl3::keyboard::Scancode::RAlt => 0xe011,
