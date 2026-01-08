@@ -1449,17 +1449,19 @@ impl AgonMachine {
     #[inline]
     fn apply_elapsed_cycles(&mut self) -> i32 {
         let cycles_elapsed = self.cycle_counter.get();
-        self.total_cycles_elapsed = self
-            .total_cycles_elapsed
-            .wrapping_add(cycles_elapsed as u64);
-        //println!("{:2} cycles, {:?}", cycles_elapsed, ez80::disassembler::disassemble(self, cpu, None, pc, pc+1));
+        if cycles_elapsed > 0 {
+            self.total_cycles_elapsed = self
+                .total_cycles_elapsed
+                .wrapping_add(cycles_elapsed as u64);
+            //println!("{:2} cycles, {:?}", cycles_elapsed, ez80::disassembler::disassemble(self, cpu, None, pc, pc+1));
 
-        for t in &mut self.prt_timers {
-            t.apply_ticks(cycles_elapsed as u16);
+            for t in &mut self.prt_timers {
+                t.apply_ticks(cycles_elapsed as u16);
+            }
+
+            self.uart0.apply_ticks(cycles_elapsed as i32);
+            self.uart1.apply_ticks(cycles_elapsed as i32);
         }
-
-        self.uart0.apply_ticks(cycles_elapsed as i32);
-        self.uart1.apply_ticks(cycles_elapsed as i32);
 
         cycles_elapsed
     }
@@ -1484,7 +1486,8 @@ impl AgonMachine {
     }
 
     #[inline]
-    pub fn do_interrupts(&mut self, cpu: &mut Cpu) {
+    pub fn do_interrupts(&mut self, cpu: &mut Cpu) -> i32 {
+        self.cycle_counter.set(0);
         // Not an interrupt. Is a soft-reset pending?
         if cpu.state.instructions_executed & 0xff == 0 {
             // perform a soft reset if requested
@@ -1496,59 +1499,59 @@ impl AgonMachine {
                 cpu.state.set_pc(0);
                 self.soft_reset
                     .store(false, std::sync::atomic::Ordering::Relaxed);
-                return;
+                return 0;
             }
         }
 
         if (cpu.state.instructions_executed & 0xf == 0 || self.gpio_vga.img.is_some())
             && cpu.state.reg.get_iff1()
         {
-            // Interrupts in priority order
-            for i in 0..self.prt_timers.len() {
-                if self.prt_timers[i].irq_due() {
-                    Environment::new(&mut cpu.state, self).interrupt(0xa + 2 * (i as u32));
-                    return;
+            'int_block: {
+                // Interrupts in priority order
+                for i in 0..self.prt_timers.len() {
+                    if self.prt_timers[i].irq_due() {
+                        Environment::new(&mut cpu.state, self).interrupt(0xa + 2 * (i as u32));
+                        break 'int_block;
+                    }
                 }
-            }
 
-            // fire uart interrupt
-            if self.uart0.is_rx_interrupt_enabled() && self.uart0.maybe_fill_rx_buf() != None || // character(s) received
-               self.uart0.ier & 0x02 != 0
-            {
-                // character(s) to send
-                let mut env = Environment::new(&mut cpu.state, self);
-                //println!("uart interrupt!");
-                env.interrupt(0x18); // uart0_handler
-                return;
-            }
+                // fire uart interrupt
+                if self.uart0.is_rx_interrupt_enabled() && self.uart0.maybe_fill_rx_buf() != None || // character(s) received
+                   self.uart0.ier & 0x02 != 0
+                {
+                    // character(s) to send
+                    let mut env = Environment::new(&mut cpu.state, self);
+                    //println!("uart interrupt!");
+                    env.interrupt(0x18); // uart0_handler
+                    break 'int_block;
+                }
 
-            if self.i2c.is_interrupt_due() {
-                let mut env = Environment::new(&mut cpu.state, self);
-                //println!("i2c interrupt!");
-                env.interrupt(0x1c);
-                return;
-            }
+                if self.i2c.is_interrupt_due() {
+                    let mut env = Environment::new(&mut cpu.state, self);
+                    //println!("i2c interrupt!");
+                    env.interrupt(0x1c);
+                    break 'int_block;
+                }
 
-            // fire gpio interrupts
-            {
-                let (b_int, c_int, d_int) = {
-                    let b_int = self.gpios.b.get_interrupt_due();
-                    let c_int = self.gpios.c.get_interrupt_due();
-                    let d_int = self.gpios.d.get_interrupt_due();
-                    (b_int, c_int, d_int)
-                };
-
+                // fire gpio interrupts
+                let b_int = self.gpios.b.get_interrupt_due();
                 if self.fire_gpio_interrupts(cpu, 0x30, b_int) {
-                    return;
+                    break 'int_block;
                 }
+                let c_int = self.gpios.c.get_interrupt_due();
                 if self.fire_gpio_interrupts(cpu, 0x40, c_int) {
-                    return;
+                    break 'int_block;
                 }
+                let d_int = self.gpios.d.get_interrupt_due();
                 if self.fire_gpio_interrupts(cpu, 0x50, d_int) {
-                    return;
+                    break 'int_block;
                 }
             }
+
+            return self.apply_elapsed_cycles() as i32;
         }
+        // no cycles
+        0
     }
 
     #[inline]
@@ -1597,9 +1600,7 @@ impl AgonMachine {
                 if self.is_paused() {
                     break;
                 }
-                self.cycle_counter.set(0);
-                self.do_interrupts(&mut cpu);
-                cycle += self.apply_elapsed_cycles() as u64;
+                cycle += self.do_interrupts(&mut cpu) as u64;
                 cycle += self.execute_instruction(&mut cpu) as u64;
             }
 
