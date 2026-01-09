@@ -1442,7 +1442,7 @@ impl AgonMachine {
         }
 
         self.cycle_counter.set(0);
-        cpu.execute_instruction(self);
+        cpu.fast_execute_instruction(self);
         self.apply_elapsed_cycles()
     }
 
@@ -1487,9 +1487,8 @@ impl AgonMachine {
 
     #[inline]
     pub fn do_interrupts(&mut self, cpu: &mut Cpu) -> i32 {
-        self.cycle_counter.set(0);
         // Not an interrupt. Is a soft-reset pending?
-        if cpu.state.instructions_executed & 0xff == 0 {
+        if cpu.state.instructions_executed & 0xfff == 0 {
             // perform a soft reset if requested
             if self.soft_reset.load(std::sync::atomic::Ordering::Relaxed) {
                 // MOS soft reset code always runs from ADL mode.
@@ -1506,6 +1505,7 @@ impl AgonMachine {
         if (cpu.state.instructions_executed & 0xf == 0 || self.gpio_vga.img.is_some())
             && cpu.state.reg.get_iff1()
         {
+            self.cycle_counter.set(0);
             'int_block: {
                 // Interrupts in priority order
                 for i in 0..self.prt_timers.len() {
@@ -1593,7 +1593,6 @@ impl AgonMachine {
         let cycles_per_ms: u64 = self.clockspeed_hz / 1000;
         let mut timeslice_start = std::time::Instant::now();
         loop {
-            // in unlimited CPU mode, this inner loop never exits
             let mut cycle: u64 = 0;
             while cycle < cycles_per_ms {
                 self.debugger_tick(&mut debugger, &mut cpu);

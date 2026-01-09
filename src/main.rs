@@ -16,14 +16,13 @@ mod parse_args;
 mod sdl2ps2;
 mod vdp_interface;
 
-const AUDIO_BUFLEN: u16 = 256;
 const PREFIX: Option<&'static str> = option_env!("PREFIX");
 
 #[derive(PartialEq)]
 enum VideoSource {
     Auto,
     Vdp,
-    Ez80Gpio,
+    //Ez80Gpio,
 }
 
 /**
