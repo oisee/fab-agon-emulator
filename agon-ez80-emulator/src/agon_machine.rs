@@ -496,6 +496,7 @@ pub struct AgonMachineConfig {
     pub mos_bin: std::path::PathBuf,
     pub gpios: Arc<gpio::GpioSet>,
     pub tx_gpio_vga_frame: std::sync::mpsc::Sender<gpio_video::GpioVgaFrame>,
+    pub interrupt_precision: i32,
 }
 
 impl AgonMachine {
@@ -542,7 +543,7 @@ impl AgonMachine {
             cs0_lbr: 0,
             cs0_ubr: 0xff,
             flash_waitstates: 4,
-            interrupt_precision: 16,
+            interrupt_precision: config.interrupt_precision,
         }
     }
 

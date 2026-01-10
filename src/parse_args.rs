@@ -27,6 +27,7 @@ OPTIONS:
 
 ADVANCED:
   --mos PATH            Use a different MOS.bin firmware
+  --precise-interrupts  Process interrupts and EZ80 hardware every cycle
   --renderer hw         Use GL/D3D renderer
   --renderer sw         Use software renderer (default)
   --uart1-baud <rate>   Open --uart1-device with the given baud rate
@@ -82,6 +83,7 @@ pub struct AppArgs {
     pub uart1_baud: Option<u32>,
     pub alternative_hostkey: bool,
     pub swap_caps_and_ctrl: bool,
+    pub precise_interrupts: bool,
 }
 
 pub fn parse_args() -> Result<AppArgs, pico_args::Error> {
@@ -129,6 +131,7 @@ pub fn parse_args() -> Result<AppArgs, pico_args::Error> {
         alternative_hostkey: pargs.contains("--ralt-hostkey"),
         verbose: pargs.contains("--verbose"),
         zero: pargs.contains(["-z", "--zero"]),
+        precise_interrupts: pargs.contains("--precise-interrupts"),
         osk: pargs.contains("--osk"),
         swap_caps_and_ctrl: pargs.contains("--swap-caps-and-ctrl"),
         scr_mode: pargs.opt_value_from_str("--mode")?,

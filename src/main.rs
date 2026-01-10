@@ -220,6 +220,7 @@ pub fn main_loop() -> i32 {
                         18_432_000
                     },
                     mos_bin: ez80_firmware,
+                    interrupt_precision: if args.precise_interrupts { 1 } else { 16 },
                 });
                 machine.set_sdcard_directory(sdcard_dir);
                 machine.set_sdcard_image(sdcard_img_file);

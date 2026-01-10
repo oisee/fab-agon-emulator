@@ -309,7 +309,8 @@ fn main() {
                 paused: _ez80_paused,
                 emulator_shutdown: _emulator_shutdown,
                 gpios: gpios_,
-                tx_gpio_vga_frame: tx_gpio_vga_frame,
+                tx_gpio_vga_frame,
+                interrupt_precision: 16, /* cycles */
                 clockspeed_hz: if args.unlimited_cpu {
                     1000_000_000
                 } else {
