@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Fab Agon Emulator is an emulator for the Agon Light, Agon Light 2, and Agon Console8 8-bit computers. It emulates both the eZ80 CPU (running MOS firmware) and the ESP32-based VDP (Video Display Processor).
 
+**Languages**: Rust (main emulator) + C++ (VDP firmware)
+
 ## Build Commands
 
 ```bash
@@ -58,24 +60,42 @@ The VDP is compiled as C++ shared libraries from submodules:
 - `userspace-vdp-gl/` - FabGL 1.0.8 fork (graphics engine)
 - `vdp-console8/` - Console8 VDP firmware (default)
 - `vdp-quark/` - Quark 1.04 firmware
-- `vdp-quark103/` - Quark 1.03 legacy firmware
 - `AgonElectronHAL/` - ElectronOS HAL
 
 Build produces: `firmware/vdp_*.so`
 
-### CPU Emulator
+### CPU Emulator (agon-ez80-emulator/)
 
-The Z80/eZ80 emulation is in an external crate: `agon-cpu-emulator` (git dependency).
+The eZ80 emulation is a local workspace crate. Key files:
+- `agon_machine.rs` (1600+ lines) - main emulation logic, I/O handling
+- `gpio.rs` - GPIO ports emulation
+- `prt_timer.rs` - programmable reload timers
+- `debugger.rs` - debug interface
 
 ### Debugger
 
 The Z80 debugger is a workspace member at `agon-light-emulator-debugger/`. Enable with `-d` or `--debugger` flag. Supports breakpoints (`-b 0x1234`), CPU state inspection, and UART1 serial testing.
 
+### CLI Emulator (agon-cli-emulator/)
+
+Headless emulator for automated testing and regression tests. Run with:
+```bash
+cargo build -r --manifest-path=./agon-cli-emulator/Cargo.toml
+./target/release/agon-cli-emulator
+```
+
 ## Platform-Specific Notes
 
 - **Linux**: Uses system SDL2 via pkg-config
-- **macOS**: Builds universal binary (Intel + ARM), SDL2 bundled and statically linked
+- **macOS**: Builds arm64 binary, SDL2 bundled and statically linked
 - **Windows**: Must use MSYS2 UCRT64 environment, run `msys-init.sh` first
+
+## Large Files
+
+Avoid reading these files in full - they are large and contain repetitive patterns:
+- `agon-ez80-emulator/src/agon_machine.rs` - 1600+ lines, main CPU loop
+- `src/vdp/userspace-vdp-gl/` - FabGL submodule, large C++ codebase
+- `src/ascii2vk.rs` - keyboard mapping tables
 
 ## Running the Emulator
 
@@ -85,7 +105,6 @@ The Z80 debugger is a workspace member at `agon-light-emulator-debugger/`. Enabl
 
 # With different firmware
 ./fab-agon-emulator --firmware quark
-./fab-agon-emulator --firmware 1.03
 ./fab-agon-emulator --firmware electron
 
 # With debugger
@@ -96,6 +115,9 @@ The Z80 debugger is a workspace member at `agon-light-emulator-debugger/`. Enabl
 
 # Unlimited CPU speed
 ./fab-agon-emulator -u
+
+# Custom MOS/VDP firmware
+./fab-agon-emulator --mos path/to/mos.bin --vdp path/to/vdp.so
 ```
 
 ## Keyboard Shortcuts (Right Ctrl + key)
