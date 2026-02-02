@@ -42,7 +42,15 @@ pub enum DebugCmd {
         reg: Reg16,
         len: u32,
     },
+    WriteMemory {
+        start: u32,
+        data: Vec<u8>,
+    },
     GetRegisters,
+    SetRegister {
+        reg_index: u8,
+        value: u32,
+    },
     GetState,
     DisassemblePc {
         adl: Option<bool>,
@@ -328,7 +336,43 @@ impl DebuggerServer {
                 };
                 self.send_mem(machine, cpu, addr, *len);
             }
+            DebugCmd::WriteMemory { start, data } => {
+                self.write_mem(machine, cpu, *start, data);
+            }
+            DebugCmd::SetRegister { reg_index, value } => {
+                self.set_register(cpu, *reg_index, *value);
+            }
         }
+    }
+
+    fn write_mem(&self, machine: &mut AgonMachine, cpu: &mut ez80::Cpu, start: u32, data: &[u8]) {
+        use ez80::Environment;
+        let mut env = Environment::new(&mut cpu.state, machine);
+        for (i, byte) in data.iter().enumerate() {
+            env.poke(start + i as u32, *byte);
+        }
+        self.con.tx.send(DebugResp::Pong).unwrap();
+    }
+
+    fn set_register(&self, cpu: &mut ez80::Cpu, reg_index: u8, value: u32) {
+        // Register indices match DZRP protocol for eZ80
+        match reg_index {
+            0 => cpu.state.set_pc(value),      // PC
+            1 => cpu.state.reg.set24(Reg16::SP, value), // SP
+            2 => cpu.state.reg.set16(Reg16::AF, value as u16), // AF
+            3 => cpu.state.reg.set24(Reg16::BC, value), // BC
+            4 => cpu.state.reg.set24(Reg16::DE, value), // DE
+            5 => cpu.state.reg.set24(Reg16::HL, value), // HL
+            6 => cpu.state.reg.set24(Reg16::IX, value), // IX
+            7 => cpu.state.reg.set24(Reg16::IY, value), // IY
+            // Alternate registers (AF', BC', DE', HL') not settable via ez80 crate
+            // I and R registers
+            12 => cpu.state.reg.set8(Reg8::I, value as u8), // I
+            13 => cpu.state.reg.set8(Reg8::R, value as u8), // R
+            // IM not directly settable via ez80 crate public API
+            _ => {} // Unknown or unsupported register, ignore
+        }
+        self.con.tx.send(DebugResp::Pong).unwrap();
     }
 
     fn send_disassembly(

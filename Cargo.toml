@@ -1,5 +1,5 @@
 [workspace]
-members = ["agon-light-emulator-debugger", "agon-ez80-emulator", "agon-cli-emulator"]
+members = ["agon-light-emulator-debugger", "agon-ez80-emulator", "agon-cli-emulator", "agon-dzrp-debugger"]
 
 [workspace.package]
 version = "1.1.0"
@@ -26,6 +26,7 @@ sdl3-sys = "*"
 pico-args = "0.5.0"
 agon-ez80-emulator = { workspace = true }
 agon-light-emulator-debugger = { workspace = true }
+agon-dzrp-debugger = { workspace = true }
 libloading = "0.8.0"
 home = "0.5.9"
 serialport = "4.3.0"
@@ -40,3 +41,4 @@ raw_tty = "0.1.0"
 agon-ez80-emulator = { path = "agon-ez80-emulator" }
 agon-light-emulator-debugger = { path = "agon-light-emulator-debugger" }
 agon-cli-emulator = { path = "agon-cli-emulator" }
+agon-dzrp-debugger = { path = "agon-dzrp-debugger" }

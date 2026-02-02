@@ -26,6 +26,8 @@ OPTIONS:
   -u, --unlimited-cpu   Don't limit eZ80 CPU frequency
 
 ADVANCED:
+  --dzrp                Enable DZRP debugger (DeZog remote protocol)
+  --dzrp-port <port>    DZRP listen port (default 11000)
   --mos PATH            Use a different MOS.bin firmware
   --precise-interrupts  Process interrupts and EZ80 hardware every cycle
   --renderer hw         Use GL/D3D renderer
@@ -66,6 +68,8 @@ pub struct AppArgs {
     pub sdcard: Option<String>,
     pub sdcard_img: Option<String>,
     pub debugger: bool,
+    pub dzrp: bool,
+    pub dzrp_port: u16,
     pub breakpoints: Vec<u32>,
     pub unlimited_cpu: bool,
     pub fullscreen: bool,
@@ -111,6 +115,8 @@ pub fn parse_args() -> Result<AppArgs, pico_args::Error> {
         sdcard: pargs.opt_value_from_str("--sdcard")?,
         sdcard_img: pargs.opt_value_from_str("--sdcard-img")?,
         debugger: pargs.contains(["-d", "--debugger"]),
+        dzrp: pargs.contains("--dzrp"),
+        dzrp_port: pargs.opt_value_from_str("--dzrp-port")?.unwrap_or(11000),
         breakpoints: pargs.values_from_fn(
             ["-b", "--breakpoint"],
             |s: &str| -> Result<u32, pico_args::Error> {

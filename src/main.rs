@@ -4,6 +4,7 @@ use agon_ez80_emulator::{gpio, AgonMachine, AgonMachineConfig, GpioVgaFrame, Ram
 use sdl3;
 use sdl3::event::Event;
 use sdl3_sys::everything::{SDL_ScaleMode, SDL_SetTextureScaleMode};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
@@ -117,6 +118,12 @@ pub fn main_loop() -> i32 {
     }
     */
 
+    // Check for exclusive debugger modes
+    if args.debugger && args.dzrp {
+        eprintln!("Error: --debugger and --dzrp cannot be used together");
+        std::process::exit(-1);
+    }
+
     let debugger_con = if args.debugger {
         let _ez80_paused = ez80_paused.clone();
         let _emulator_shutdown = emulator_shutdown.clone();
@@ -125,7 +132,22 @@ pub fn main_loop() -> i32 {
                 tx_cmd_debugger,
                 rx_resp_debugger,
                 _emulator_shutdown,
-                _ez80_paused.load(std::sync::atomic::Ordering::Relaxed),
+                _ez80_paused.load(Ordering::Relaxed),
+            );
+        });
+        Some(DebuggerConnection {
+            tx: tx_resp_debugger,
+            rx: rx_cmd_debugger,
+        })
+    } else if args.dzrp {
+        let _emulator_shutdown = emulator_shutdown.clone();
+        let dzrp_port = args.dzrp_port;
+        let _dzrp_thread = thread::spawn(move || {
+            agon_dzrp_debugger::start(
+                tx_cmd_debugger,
+                rx_resp_debugger,
+                _emulator_shutdown,
+                dzrp_port,
             );
         });
         Some(DebuggerConnection {

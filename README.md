@@ -66,6 +66,36 @@ fab-agon-emulator -d
 At the debugger prompt (which will be in the terminal window you invoked the
 emulator from), type `help` for instructions on the use of the debugger.
 
+## DeZog Integration (DZRP)
+
+The emulator supports the DeZog Remote Protocol (DZRP) for VS Code debugging.
+Start with:
+
+```
+fab-agon-emulator --dzrp
+```
+
+This opens a TCP server on port 11000 (configurable with `--dzrp-port`).
+
+To use with VS Code:
+1. Install the [DeZog extension](https://marketplace.visualstudio.com/items?itemName=maziac.dezog)
+2. Create `.vscode/launch.json`:
+```json
+{
+  "version": "0.2.0",
+  "configurations": [{
+    "type": "dezog",
+    "request": "launch",
+    "name": "Agon DZRP",
+    "remoteType": "dzrp",
+    "dzrp": { "port": 11000 }
+  }]
+}
+```
+3. Start the emulator with `--dzrp`, then launch the DeZog debugger
+
+Note: `--dzrp` and `--debugger` are mutually exclusive.
+
 ## Debug IO space
 
 Some IO addresses unused by the EZ80F92 are used by the emulator for debugging

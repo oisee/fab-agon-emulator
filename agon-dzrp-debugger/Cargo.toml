@@ -1,0 +1,9 @@
+[package]
+name = "agon-dzrp-debugger"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+agon-ez80-emulator = { workspace = true }
