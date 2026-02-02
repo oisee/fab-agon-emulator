@@ -9,7 +9,6 @@ check:
 
 vdp:
 ifeq ($(UNAME_S),Darwin)
-	EXTRA_FLAGS="-Wno-c++11-narrowing -arch x86_64" SUFFIX=.x86_64 $(MAKE) -C src/vdp
 	EXTRA_FLAGS="-Wno-c++11-narrowing -arch arm64" SUFFIX=.arm64 $(MAKE) -C src/vdp
 	$(MAKE) -C src/vdp lipo
 	find src/vdp -type f \( -name "*.so" -a ! -name "*.x86_64.so" -a ! -name "*.arm64.so" \) -exec cp {} firmware/ \;
@@ -29,9 +28,8 @@ ifeq ($(OS),Windows_NT)
 	set FORCE=1 && cargo build -r
 	cp ./target/release/fab-agon-emulator.exe .
 else ifeq ($(UNAME_S),Darwin)
-	FORCE=1 cargo build -r --target=x86_64-apple-darwin
 	FORCE=1 cargo build -r --target=aarch64-apple-darwin
-	lipo -create -output ./fab-agon-emulator ./target/x86_64-apple-darwin/release/fab-agon-emulator ./target/aarch64-apple-darwin/release/fab-agon-emulator
+	lipo -create -output ./fab-agon-emulator ./target/aarch64-apple-darwin/release/fab-agon-emulator
 else
 	FORCE=1 cargo build -r
 	cp ./target/release/fab-agon-emulator .
@@ -40,7 +38,6 @@ endif
 vdp-clean:
 	rm -f firmware/*.so
 ifeq ($(UNAME_S),Darwin)
-	EXTRA_FLAGS="-Wno-c++11-narrowing -arch x86_64" SUFFIX=.x86_64 $(MAKE) -C src/vdp clean
 	EXTRA_FLAGS="-Wno-c++11-narrowing -arch arm64" SUFFIX=.arm64 $(MAKE) -C src/vdp clean
 else
 	$(MAKE) -C src/vdp clean
