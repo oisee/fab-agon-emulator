@@ -70,6 +70,27 @@ agon-ez80 [OPTIONS]
 
 Text-only VDP server for terminal/headless operation.
 
+### agon-vdp-sdl
+
+Graphical VDP server using SDL and the VDP .so library.
+
+```bash
+agon-vdp-sdl [OPTIONS]
+  --socket <path>       Unix socket (default: /tmp/agon-vdp.sock)
+  --tcp <port>          Listen on TCP port
+  -f, --firmware <name> VDP firmware: console8, quark, electron
+  --vdp <path>          Explicit path to VDP .so library
+  -v, -vv               Verbosity levels
+  --fullscreen          Start in fullscreen mode
+```
+
+Features:
+- Full graphical rendering via SDL3/OpenGL
+- Audio via SDL audio subsystem
+- Keyboard input via PS/2 scancodes
+- Mouse support
+- Loads VDP .so firmware (console8, quark, electron)
+
 ```bash
 agon-vdp-cli [OPTIONS]
   --socket <path>       Unix socket (default: /tmp/agon-vdp.sock)
@@ -194,15 +215,27 @@ fab-agon-emulator/
 │       ├── logger.rs
 │       └── text_vdp.rs      # VDU command handling
 │
+├── agon-vdp-sdl/            # Graphical VDP server
+│   ├── Cargo.toml
+│   └── src/
+│       ├── main.rs
+│       ├── parse_args.rs
+│       ├── vdp_interface.rs # VDP .so library loading
+│       ├── audio.rs         # SDL audio callback
+│       └── sdl2ps2.rs       # Keyboard translation
+│
+├── sdcard_local/            # Local sdcard with ZORK + ZINC
+│
 └── zinc/                    # ZINC CP/M layer (submodule)
 ```
 
 ## Future Work
 
-- `agon-vdp-bridge`: Graphical VDP wrapping the C++ .so library
+- **Reconnection support**: Auto-reconnect eZ80 when VDP restarts (and vice versa)
 - Web-based VDP using WebSockets + Canvas/WebGL
 - iOS/Android VDP apps
 - Hardware bridge to connect to real Agon VDP
+- Session recording/replay for debugging
 
 ## References
 
