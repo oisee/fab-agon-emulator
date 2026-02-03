@@ -6,6 +6,7 @@ members = [
     "agon-dzrp-debugger",
     "agon-protocol",
     "agon-vdp-cli",
+    "agon-vdp-sdl",
     "agon-ez80",
 ]
 

@@ -1,0 +1,15 @@
+[package]
+name = "agon-vdp-sdl"
+version = "1.1.0"
+edition = "2021"
+description = "Graphical VDP server for Agon emulator (SDL + VDP .so library)"
+
+[[bin]]
+name = "agon-vdp-sdl"
+path = "src/main.rs"
+
+[dependencies]
+agon-protocol = { path = "../agon-protocol" }
+libloading = "0.8"
+sdl3 = "0.14.36"
+sdl3-sys = "*"

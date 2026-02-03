@@ -62,6 +62,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "agon-vdp-sdl"
+version = "1.1.0"
+dependencies = [
+ "agon-protocol",
+ "libloading",
+ "sdl3",
+ "sdl3-sys",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
