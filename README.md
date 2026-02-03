@@ -2,6 +2,19 @@
 
 An emulator of the Agon Light, Agon Light 2, and Agon Console8 8-bit computers.
 
+## Binaries
+
+This project provides multiple emulator binaries:
+
+| Binary | Description |
+|--------|-------------|
+| `fab-agon-emulator` | Full graphical emulator with SDL2/OpenGL |
+| `agon-cli-emulator` | Headless CLI emulator (combined eZ80+VDP) |
+| `agon-ez80` | Standalone eZ80 CPU (connects to external VDP) |
+| `agon-vdp-cli` | Text-only VDP server (for terminal use) |
+
+The split architecture (`agon-ez80` + `agon-vdp-cli`) allows running the CPU and display on different machines or in different processes. See [Split VDP Architecture](./reports/2026-02-03-001-split-vdp-architecture.md) for details.
+
 ## How to compile
 
 You may not need to compile, as there are regular pre-compiled
@@ -9,6 +22,30 @@ You may not need to compile, as there are regular pre-compiled
 for Linux (amd64), Windows (x64) and Mac (Intel & ARM).
 
 Otherwise, read the [guide to compiling Fab Agon Emulator](./docs/compiling.md)
+
+## Quick Start: Split Architecture
+
+Run the eZ80 and VDP as separate processes:
+
+```bash
+# Build the split binaries
+cargo build -p agon-ez80 -p agon-vdp-cli
+
+# Terminal 1: Start the text VDP
+./target/debug/agon-vdp-cli
+
+# Terminal 2: Start the eZ80 CPU
+./target/debug/agon-ez80 --sdcard ./sdcard
+```
+
+This gives you a text-only Agon terminal. You can run MOS commands, BASIC programs, and even CP/M software via ZINC:
+
+```
+/ *zinc zork1
+ZORK I: The Great Underground Empire
+West of House
+You are standing in an open field west of a white house...
+```
 
 ## Keyboard Shortcuts
 
@@ -122,7 +159,19 @@ Read about other command-line options with:
 
 ```
 fab-agon-emulator --help
+agon-ez80 --help
+agon-vdp-cli --help
 ```
+
+## Reports & Documentation
+
+Technical reports and design documents are in the [reports/](./reports/) directory:
+
+- [Split VDP Architecture](./reports/2026-02-03-001-split-vdp-architecture.md) - Networked eZ80/VDP communication protocol
+
+## Submodules
+
+- `zinc/` - [ZINC Is Not CP/M](https://github.com/nihirash/ZINC) - CP/M compatibility layer for Agon
 
 ## Mac-specific issues
 

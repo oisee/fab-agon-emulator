@@ -19,6 +19,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "agon-ez80"
+version = "1.1.0"
+dependencies = [
+ "agon-ez80-emulator",
+ "agon-light-emulator-debugger",
+ "agon-protocol",
+ "pico-args",
+]
+
+[[package]]
 name = "agon-ez80-emulator"
 version = "1.1.0"
 dependencies = [
@@ -37,6 +47,18 @@ dependencies = [
  "ctrlc",
  "inline_colorization",
  "rustyline",
+]
+
+[[package]]
+name = "agon-protocol"
+version = "1.1.0"
+
+[[package]]
+name = "agon-vdp-cli"
+version = "1.1.0"
+dependencies = [
+ "agon-protocol",
+ "pico-args",
 ]
 
 [[package]]

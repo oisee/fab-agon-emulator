@@ -1,0 +1,9 @@
+[package]
+name = "agon-protocol"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Protocol library for eZ80/VDP communication over sockets"
+
+[dependencies]

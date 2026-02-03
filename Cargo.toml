@@ -1,5 +1,13 @@
 [workspace]
-members = ["agon-light-emulator-debugger", "agon-ez80-emulator", "agon-cli-emulator", "agon-dzrp-debugger"]
+members = [
+    "agon-light-emulator-debugger",
+    "agon-ez80-emulator",
+    "agon-cli-emulator",
+    "agon-dzrp-debugger",
+    "agon-protocol",
+    "agon-vdp-cli",
+    "agon-ez80",
+]
 
 [workspace.package]
 version = "1.1.0"

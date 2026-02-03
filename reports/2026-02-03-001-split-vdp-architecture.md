@@ -1,205 +1,211 @@
 # Split VDP Architecture: Networked eZ80/VDP Communication
 
 **Date**: 2026-02-03
-**Status**: Proposal
+**Status**: Implemented
 
 ## Overview
 
-Proposal to separate the VDP (Video Display Processor) from the eZ80 CPU emulation, allowing them to run as independent processes communicating over IPC or network sockets.
+The VDP (Video Display Processor) has been separated from the eZ80 CPU emulation, allowing them to run as independent processes communicating over Unix sockets or TCP.
 
 ## Motivation
 
 - Run headless eZ80 emulation on servers/CI while displaying on a local machine
 - Enable remote "Agon terminal" clients
-- Support multiple VDP frontends (native SDL, web-based, etc.)
+- Support multiple VDP frontends (native SDL, web-based, text-only CLI)
 - Better resource allocation (GPU rendering on capable machine, CPU emulation elsewhere)
 - Mirrors real hardware architecture (eZ80 and ESP32 are separate chips with serial link)
 
-## Current Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                fab-agon-emulator                     │
-│  ┌─────────────┐    channels    ┌─────────────────┐ │
-│  │ eZ80 Thread │ ◄────────────► │ VDP Thread      │ │
-│  │             │   (Sender/     │ (loads .so lib) │ │
-│  │ MOS firmware│    Receiver)   │ SDL/OpenGL      │ │
-│  └─────────────┘                └─────────────────┘ │
-└─────────────────────────────────────────────────────┘
-```
-
-## Proposed Architecture
+## Architecture
 
 ```
 ┌─────────────────────────┐         ┌─────────────────────────┐
-│  agon-cli-emulator      │         │  vdp-server             │
-│  (or headless variant)  │         │                         │
-│  ┌─────────────┐        │  Unix   │  ┌─────────────────┐    │
-│  │ eZ80 CPU    │        │ Socket  │  │ VDP             │    │
-│  │             │ ◄──────┼────────►│  │ (loads .so lib) │    │
-│  │ MOS firmware│        │  or     │  │ SDL/OpenGL      │    │
-│  └─────────────┘        │  TCP    │  └─────────────────┘    │
+│      agon-ez80          │         │    agon-vdp-cli         │
+│                         │  Unix   │                         │
+│  ┌─────────────┐        │ Socket  │  ┌─────────────────┐    │
+│  │ eZ80 CPU    │        │   or    │  │ Text VDP        │    │
+│  │             │ ◄──────┼────────►│  │ (stdout/stdin)  │    │
+│  │ MOS firmware│        │  TCP    │  └─────────────────┘    │
+│  └─────────────┘        │         │                         │
 └─────────────────────────┘         └─────────────────────────┘
       Machine A                           Machine B
       (or same machine)                   (or same machine)
 ```
 
-## SerialLink Trait
+## New Crates
 
-The existing abstraction makes this straightforward:
+### agon-protocol
 
-```rust
-// agon-ez80-emulator/src/uart.rs
-pub trait SerialLink {
-    fn send(&mut self, byte: u8);
-    fn recv(&mut self) -> Option<u8>;
-    fn read_clear_to_send(&mut self) -> bool;
-}
-```
-
-## IPC Options (Local Communication)
-
-| Method | Latency | Complexity | Notes |
-|--------|---------|------------|-------|
-| Shared memory + ring buffer | ~100ns | High | Zero-copy, needs synchronization |
-| Unix sockets | ~1-2μs | Low | Best balance for serial data |
-| Named pipes (FIFO) | ~1-2μs | Low | Unidirectional only |
-| TCP loopback | ~10μs | Low | Cross-platform, network overhead |
-
-**Recommendation**: Unix sockets for local, TCP for remote connections.
-
-## Implementation Plan
-
-### Phase 1: Unix Socket SerialLink
-
-Add to `agon-cli-emulator`:
+Shared protocol library defining message format and socket handling.
 
 ```rust
-use std::os::unix::net::UnixStream;
-
-pub struct UnixSocketSerialLink {
-    stream: UnixStream,
-    read_buf: VecDeque<u8>,
-}
-
-impl SerialLink for UnixSocketSerialLink {
-    fn send(&mut self, byte: u8) {
-        self.stream.write_all(&[byte]).ok();
-    }
-
-    fn recv(&mut self) -> Option<u8> {
-        // Non-blocking read from socket
-        self.stream.set_nonblocking(true).ok();
-        let mut buf = [0u8; 256];
-        if let Ok(n) = self.stream.read(&mut buf) {
-            self.read_buf.extend(&buf[..n]);
-        }
-        self.read_buf.pop_front()
-    }
-
-    fn read_clear_to_send(&mut self) -> bool {
-        true // Flow control could be implemented via socket state
-    }
+pub enum Message {
+    UartData(Vec<u8>),      // 0x01: Bidirectional UART bytes
+    Vsync,                   // 0x02: VDP → eZ80 frame sync
+    Cts(bool),               // 0x03: VDP → eZ80 flow control
+    Hello { version, flags }, // 0x10: eZ80 → VDP handshake
+    HelloAck { version, capabilities }, // 0x11: VDP → eZ80 handshake
+    Shutdown,                // 0x20: Either direction
 }
 ```
 
-### Phase 2: VDP Server Binary
+Wire format: `[len:u16-LE][type:u8][payload...]`
 
-New crate: `vdp-server`
+### agon-ez80
 
-```rust
-fn main() {
-    let socket_path = "/tmp/agon-vdp.sock";
-    let listener = UnixListener::bind(socket_path)?;
+Standalone eZ80 emulator binary that connects to an external VDP.
 
-    // Load VDP .so library (existing code from fab-agon-emulator)
-    let vdp = load_vdp_library("firmware/vdp_console8.so")?;
-
-    // Accept connection from eZ80 emulator
-    let (stream, _) = listener.accept()?;
-
-    // Bridge socket <-> VDP library
-    // - Bytes from socket -> VDP UART receive
-    // - VDP UART send -> socket
-    // - SDL events -> keyboard packets -> socket
-}
-```
-
-### Phase 3: CLI Flags
-
-```
-agon-cli-emulator [OPTIONS]
-
-OPTIONS:
-  --vdp-socket <path>    Connect to VDP via Unix socket
-  --vdp-tcp <host:port>  Connect to VDP via TCP
-  --vdp-listen <path>    Listen for VDP connection (server mode)
-```
-
-```
-vdp-server [OPTIONS]
-
-OPTIONS:
-  --socket <path>        Listen on Unix socket (default: /tmp/agon-vdp.sock)
-  --tcp <port>           Listen on TCP port
-  --connect <host:port>  Connect to eZ80 emulator (client mode)
-  --firmware <name>      VDP firmware: console8, quark, electron
-```
-
-## Use Cases
-
-### Local Split (Same Machine)
 ```bash
-# Terminal 1: VDP server with graphics
-vdp-server --socket /tmp/agon.sock
-
-# Terminal 2: Headless eZ80
-agon-cli-emulator --vdp-socket /tmp/agon.sock --sdcard ./sdcard
+agon-ez80 [OPTIONS]
+  --socket <path>       Unix socket (default: /tmp/agon-vdp.sock)
+  --tcp <host:port>     Use TCP instead
+  --mos <path>          MOS firmware
+  --sdcard <path>       SD card directory
+  -u, --unlimited       Unlimited CPU speed
+  -d, --debugger        Enable debugger
+  -v, -vv, -vvv         Verbosity levels
+  --log <file>          Log to file
 ```
 
-### Remote Display
+### agon-vdp-cli
+
+Text-only VDP server for terminal/headless operation.
+
 ```bash
-# Server (headless, runs eZ80):
-agon-cli-emulator --vdp-listen 0.0.0.0:5000 --sdcard ./sdcard
-
-# Client (has display):
-vdp-server --connect server.local:5000
+agon-vdp-cli [OPTIONS]
+  --socket <path>       Unix socket (default: /tmp/agon-vdp.sock)
+  --tcp <port>          Listen on TCP
+  -v, -vv, -vvv         Verbosity levels
+  --log <file>          Log to file
 ```
 
-### Web Frontend (Future)
+Features:
+- Prints VDP text output to stdout
+- Reads keyboard input from stdin
+- Sends VSYNC at ~60Hz
+- Handles VDU commands (color, cursor, system queries)
+- Keyboard events sent with 10ms delays (matching real hardware timing)
+
+## Protocol Details
+
+### Handshake
+
+1. VDP listens on socket
+2. eZ80 connects
+3. eZ80 sends `HELLO { version: 1, flags: 0 }`
+4. VDP sends `HELLO_ACK { version: 1, capabilities: "{...}" }`
+5. Normal operation begins
+
+### Capabilities JSON
+
+```json
+{"type":"cli","cols":80,"rows":25}
+```
+
+Future VDPs might report:
+```json
+{"type":"gfx","width":640,"height":480,"audio":true}
+```
+
+### Timing
+
+- VSYNC: ~60Hz (16.666ms interval)
+- Keyboard events: 10ms delay between each key down/up packet
+- UART batching: 100μs intervals
+
+## Usage
+
+### Basic Usage (Two Terminals)
+
 ```bash
-# eZ80 emulator
-agon-cli-emulator --vdp-socket /tmp/agon.sock
+# Terminal 1: Start text VDP
+./target/debug/agon-vdp-cli
 
-# WebSocket bridge + browser-based VDP
-vdp-web-server --socket /tmp/agon.sock --http-port 8080
+# Terminal 2: Start eZ80
+./target/debug/agon-ez80 --sdcard ./sdcard
 ```
 
-## Protocol Considerations
+### With Debug Logging
 
-The eZ80-VDP protocol is already defined by the Agon hardware:
-- VDP commands: VDU byte sequences
-- Keyboard packets: 0x81 + length + keycode + modifiers + vkey + keydown
-- System responses: Mode info, RTC, general poll
+```bash
+# Terminal 1: VDP with trace logging to file
+./target/debug/agon-vdp-cli -vv --log /tmp/vdp.log
 
-No new protocol needed - just transport the existing byte stream.
+# Terminal 2: eZ80 with trace logging
+./target/debug/agon-ez80 --sdcard ./sdcard -vv --log /tmp/ez80.log
+```
 
-## Future Extensions
+### TCP Mode (Remote Connection)
 
-1. **Multiplexing**: Multiple VDP clients viewing same eZ80 session
-2. **Recording/Replay**: Capture byte stream for debugging
-3. **Web VDP**: Browser-based display using WebGL + WebSockets
-4. **Hardware bridge**: Connect to real Agon hardware VDP
+```bash
+# Machine A: VDP listening on TCP
+./target/debug/agon-vdp-cli --tcp 5000
 
-## Files to Modify/Create
+# Machine B: eZ80 connecting via TCP
+./target/debug/agon-ez80 --tcp machineA:5000 --sdcard ./sdcard
+```
 
-- `agon-cli-emulator/src/main.rs` - Add socket connection options
-- `agon-cli-emulator/src/socket_link.rs` - New: Unix/TCP SerialLink implementations
-- `vdp-server/` - New crate: Standalone VDP server
-- `Cargo.toml` - Add vdp-server to workspace
+## Verified Working
+
+- MOS boot and command prompt
+- Directory listing (`DIR`, `ls`)
+- Navigation (`cd`)
+- CP/M compatibility layer (ZINC)
+- Zork I running under ZINC
+
+Example session:
+```
+Agon Console8 MOS Version 2.3.3 Rainbow
+
+/ *zinc zork1
+ZINC is Not CP/M
+(c) 2024 Aleksandr Sharikhin
+
+ZORK I: The Great Underground Empire
+Copyright (c) 1981, 1982, 1983 Infocom, Inc.
+
+West of House
+You are standing in an open field west of a white house...
+```
+
+## Files Created
+
+```
+fab-agon-emulator/
+├── agon-protocol/           # Protocol library
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs
+│       ├── messages.rs      # Message types & encoding
+│       └── socket.rs        # Unix/TCP socket abstraction
+│
+├── agon-ez80/               # Standalone CPU binary
+│   ├── Cargo.toml
+│   └── src/
+│       ├── main.rs
+│       ├── parse_args.rs
+│       ├── logger.rs
+│       └── socket_link.rs   # SerialLink over socket
+│
+├── agon-vdp-cli/            # Text VDP server
+│   ├── Cargo.toml
+│   └── src/
+│       ├── main.rs
+│       ├── parse_args.rs
+│       ├── logger.rs
+│       └── text_vdp.rs      # VDU command handling
+│
+└── zinc/                    # ZINC CP/M layer (submodule)
+```
+
+## Future Work
+
+- `agon-vdp-bridge`: Graphical VDP wrapping the C++ .so library
+- Web-based VDP using WebSockets + Canvas/WebGL
+- iOS/Android VDP apps
+- Hardware bridge to connect to real Agon VDP
 
 ## References
 
-- Real Agon eZ80-ESP32 communication: Serial UART at 1,152,000 baud
-- QEMU `-serial` option: Supports stdio, file, pipe, tcp, unix sockets
-- Similar projects: DOSBox serial port networking, VICE remote monitor
+- ZINC: https://github.com/nihirash/ZINC
+- Agon eZ80-ESP32 protocol: Serial UART at 1,152,000 baud
+- Similar projects: QEMU serial networking, DOSBox serial port

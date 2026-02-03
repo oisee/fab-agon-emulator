@@ -13,3 +13,6 @@
 [submodule "src/vdp/AgonElectronHAL"]
 	path = src/vdp/AgonElectronHAL
 	url = https://github.com/S0urceror/AgonElectronHAL.git
+[submodule "zinc"]
+	path = zinc
+	url = https://github.com/nihirash/ZINC.git

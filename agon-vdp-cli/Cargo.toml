@@ -1,0 +1,15 @@
+[package]
+name = "agon-vdp-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Text-only VDP server for Agon emulation over sockets"
+
+[[bin]]
+name = "agon-vdp-cli"
+path = "src/main.rs"
+
+[dependencies]
+agon-protocol = { path = "../agon-protocol" }
+pico-args = "0.5.0"

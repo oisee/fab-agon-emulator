@@ -1,0 +1,17 @@
+[package]
+name = "agon-ez80"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Standalone eZ80 emulator connecting to external VDP via socket"
+
+[[bin]]
+name = "agon-ez80"
+path = "src/main.rs"
+
+[dependencies]
+agon-ez80-emulator = { workspace = true }
+agon-light-emulator-debugger = { workspace = true }
+agon-protocol = { path = "../agon-protocol" }
+pico-args = "0.5.0"
