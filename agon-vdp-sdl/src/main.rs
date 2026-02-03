@@ -44,93 +44,10 @@ fn main() {
         }
     };
 
-    // Determine socket address
-    let addr = if let Some(port) = args.tcp_port {
-        SocketAddr::tcp(format!("0.0.0.0:{}", port))
-    } else {
-        let path = args
-            .socket_path
-            .clone()
-            .unwrap_or_else(|| agon_protocol::socket::DEFAULT_SOCKET_PATH.to_string());
-        #[cfg(unix)]
-        {
-            SocketAddr::unix(&path)
-        }
-        #[cfg(not(unix))]
-        {
-            eprintln!("Unix sockets not supported on this platform, use --tcp");
-            std::process::exit(1);
-        }
-    };
-
-    // Bind listener
-    let listener = match SocketListener::bind(&addr) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("Failed to bind to {}: {}", addr, e);
-            std::process::exit(1);
-        }
-    };
-
-    eprintln!("Listening on {}", addr);
-    eprintln!("Waiting for eZ80 to connect...");
-
-    // Main server loop
-    loop {
-        match listener.accept() {
-            Ok(conn) => {
-                eprintln!("Connection accepted");
-                if let Err(e) = handle_connection(conn, &vdp, &args) {
-                    eprintln!("Connection error: {}", e);
-                }
-                eprintln!("Connection closed, waiting for new connection...");
-            }
-            Err(e) => {
-                eprintln!("Accept error: {}", e);
-                std::thread::sleep(Duration::from_millis(100));
-            }
-        }
-    }
-}
-
-fn handle_connection(
-    conn: SocketConnection,
-    vdp: &VdpInterface,
-    args: &parse_args::AppArgs,
-) -> Result<(), ProtocolError> {
-    let shutdown = Arc::new(AtomicBool::new(false));
-
-    // Split connection
-    let (mut reader, mut writer) = conn.split();
-
-    // Wait for HELLO
-    eprintln!("Waiting for HELLO...");
-    let msg = reader.recv()?;
-    match msg {
-        Message::Hello { version, flags } => {
-            if args.verbosity >= Verbosity::Verbose {
-                eprintln!("Received HELLO: version={}, flags={}", version, flags);
-            }
-        }
-        _ => {
-            return Err(ProtocolError::InvalidFormat("Expected HELLO".to_string()));
-        }
-    }
-
-    // Send HELLO_ACK
-    let caps = r#"{"type":"sdl","width":640,"height":480,"audio":true}"#;
-    writer.send(&Message::HelloAck {
-        version: PROTOCOL_VERSION,
-        capabilities: caps.to_string(),
-    })?;
-    if args.verbosity >= Verbosity::Verbose {
-        eprintln!("Sent HELLO_ACK");
-    }
-
-    // Initialize SDL
-    let sdl_context = sdl3::init().map_err(|e| ProtocolError::ConnectionClosed)?;
-    let video_subsystem = sdl_context.video().map_err(|e| ProtocolError::ConnectionClosed)?;
-    let mut event_pump = sdl_context.event_pump().map_err(|e| ProtocolError::ConnectionClosed)?;
+    // Initialize SDL first
+    let sdl_context = sdl3::init().expect("Failed to init SDL");
+    let video_subsystem = sdl_context.video().expect("Failed to init SDL video");
+    let mut event_pump = sdl_context.event_pump().expect("Failed to get event pump");
 
     // Create window
     let mut window = video_subsystem
@@ -138,14 +55,13 @@ fn handle_connection(
         .position_centered()
         .resizable()
         .build()
-        .map_err(|e| ProtocolError::ConnectionClosed)?;
+        .expect("Failed to create window");
 
     if args.fullscreen {
         let _ = window.set_fullscreen(true);
     }
 
     let mut canvas = window.into_canvas();
-
     let texture_creator = canvas.texture_creator();
     let mut texture = texture_creator
         .create_texture_streaming(
@@ -153,7 +69,7 @@ fn handle_connection(
             1024,
             768,
         )
-        .map_err(|_| ProtocolError::ConnectionClosed)?;
+        .expect("Failed to create texture");
 
     unsafe {
         SDL_SetTextureScaleMode(texture.raw(), SDL_ScaleMode::NEAREST);
@@ -186,16 +102,145 @@ fn handle_connection(
         }
     };
 
-    // Start VDP thread
+    // Start VDP thread BEFORE accepting connections
     let vdp_setup = vdp.vdp_setup.clone();
-    let vdp_loop = vdp.vdp_loop.clone();
-    let shutdown_vdp = shutdown.clone();
+    let vdp_loop_fn = vdp.vdp_loop.clone();
     let _vdp_thread = std::thread::spawn(move || unsafe {
         (*vdp_setup)();
-        while !shutdown_vdp.load(Ordering::Relaxed) {
-            (*vdp_loop)();
-        }
+        (*vdp_loop_fn)();
     });
+
+    // Warmup: render VDP while waiting for it to initialize
+    eprintln!("Initializing VDP...");
+    let mut vgabuf: Vec<u8> = vec![0u8; 1024 * 768 * 3];
+    let mut mode_w: u32 = 640;
+    let mut mode_h: u32 = 480;
+    let mut frame_rate_hz: f32 = 60.0;
+
+    for _ in 0..60 {  // ~1 second of warmup at 60fps
+        // Process SDL events during warmup
+        for event in event_pump.poll_iter() {
+            if let Event::Quit { .. } = event {
+                std::process::exit(0);
+            }
+        }
+
+        // Signal vblank
+        unsafe { (*vdp.signal_vblank)() };
+
+        // Copy and render framebuffer
+        unsafe {
+            (*vdp.copyVgaFramebuffer)(
+                &mut mode_w,
+                &mut mode_h,
+                vgabuf.as_mut_ptr(),
+                &mut frame_rate_hz,
+            );
+        }
+
+        if mode_w > 0 && mode_h > 0 {
+            let pitch = mode_w as usize * 3;
+            let _ = texture.update(
+                sdl3::rect::Rect::new(0, 0, mode_w, mode_h),
+                &vgabuf[..pitch * mode_h as usize],
+                pitch,
+            );
+            let _ = canvas.clear();
+            let _ = canvas.copy(&texture,
+                sdl3::rect::Rect::new(0, 0, mode_w, mode_h),
+                None);
+            canvas.present();
+        }
+
+        std::thread::sleep(Duration::from_millis(16));
+    }
+    eprintln!("VDP ready");
+
+    // Determine socket address
+    let addr = if let Some(port) = args.tcp_port {
+        SocketAddr::tcp(format!("0.0.0.0:{}", port))
+    } else {
+        let path = args
+            .socket_path
+            .clone()
+            .unwrap_or_else(|| agon_protocol::socket::DEFAULT_SOCKET_PATH.to_string());
+        #[cfg(unix)]
+        {
+            SocketAddr::unix(&path)
+        }
+        #[cfg(not(unix))]
+        {
+            eprintln!("Unix sockets not supported on this platform, use --tcp");
+            std::process::exit(1);
+        }
+    };
+
+    // Bind listener
+    let listener = match SocketListener::bind(&addr) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Failed to bind to {}: {}", addr, e);
+            std::process::exit(1);
+        }
+    };
+
+    eprintln!("Listening on {}", addr);
+    eprintln!("Waiting for eZ80 to connect...");
+
+    // Accept one connection at a time
+    loop {
+        match listener.accept() {
+            Ok(conn) => {
+                eprintln!("Connection accepted");
+                if let Err(e) = run_session(conn, &vdp, &args, &mut event_pump, &mut canvas, &mut texture) {
+                    eprintln!("Session error: {}", e);
+                }
+                eprintln!("Connection closed, waiting for new connection...");
+            }
+            Err(e) => {
+                eprintln!("Accept error: {}", e);
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+}
+
+fn run_session(
+    conn: SocketConnection,
+    vdp: &VdpInterface,
+    args: &parse_args::AppArgs,
+    event_pump: &mut sdl3::EventPump,
+    canvas: &mut sdl3::render::Canvas<sdl3::video::Window>,
+    texture: &mut sdl3::render::Texture,
+) -> Result<(), ProtocolError> {
+    let shutdown = Arc::new(AtomicBool::new(false));
+
+    // Split connection
+    let (mut reader, mut writer) = conn.split();
+
+    // Wait for HELLO
+    eprintln!("Waiting for HELLO...");
+    let msg = reader.recv()?;
+    match msg {
+        Message::Hello { version, flags } => {
+            if args.verbosity >= Verbosity::Verbose {
+                eprintln!("Received HELLO: version={}, flags={}", version, flags);
+            }
+        }
+        _ => {
+            return Err(ProtocolError::InvalidFormat("Expected HELLO".to_string()));
+        }
+    }
+
+    // Send HELLO_ACK
+    let caps = r#"{"type":"sdl","width":640,"height":480,"audio":true}"#;
+    writer.send(&Message::HelloAck {
+        version: PROTOCOL_VERSION,
+        capabilities: caps.to_string(),
+    })?;
+    if args.verbosity >= Verbosity::Verbose {
+        eprintln!("Sent HELLO_ACK");
+    }
 
     // Set up socket reader thread
     let (tx_from_ez80, rx_from_ez80): (Sender<Message>, Receiver<Message>) = mpsc::channel();
@@ -228,6 +273,7 @@ fn handle_connection(
     let mut last_vsync = Instant::now();
     let vsync_interval = Duration::from_micros(16666);
     let mut rctrl_pressed = false;
+    let mut vsync_count: u64 = 0;
 
     'running: loop {
         // Process SDL events
@@ -235,20 +281,18 @@ fn handle_connection(
             match event {
                 Event::Quit { .. } => {
                     shutdown.store(true, Ordering::Relaxed);
-                    break 'running;
+                    std::process::exit(0);
                 }
                 Event::KeyDown { scancode: Some(scancode), keycode, repeat: false, .. } => {
-                    // Track Right Ctrl state
                     if scancode == sdl3::keyboard::Scancode::RCtrl {
                         rctrl_pressed = true;
                         continue;
                     }
-                    // Check for Right Ctrl shortcuts
                     if rctrl_pressed {
                         match keycode {
                             Some(Keycode::Q) => {
                                 shutdown.store(true, Ordering::Relaxed);
-                                break 'running;
+                                std::process::exit(0);
                             }
                             Some(Keycode::M) => unsafe {
                                 (*vdp.dump_vdp_mem_stats)();
@@ -269,10 +313,7 @@ fn handle_connection(
                     unsafe { (*vdp.sendPS2KbEventToFabgl)(ps2, 0) };
                 }
                 Event::MouseMotion { .. } => {
-                    let packet: [u8; 4] = [
-                        0x08 | mouse_btn_state,
-                        0, 0, 0, // delta values would go here for relative mode
-                    ];
+                    let packet: [u8; 4] = [0x08 | mouse_btn_state, 0, 0, 0];
                     unsafe { (*vdp.sendHostMouseEventToFabgl)(packet.as_ptr()) };
                 }
                 Event::MouseButtonDown { mouse_btn, .. } => {
@@ -303,11 +344,17 @@ fn handle_connection(
         while let Ok(msg) = rx_from_ez80.try_recv() {
             match msg {
                 Message::UartData(data) => {
+                    if args.verbosity >= Verbosity::Trace {
+                        eprintln!("[VDP] <- UART ({} bytes)", data.len());
+                    }
                     for byte in data {
                         unsafe { (*vdp.z80_send_to_vdp)(byte) };
                     }
                 }
                 Message::Shutdown => {
+                    if args.verbosity >= Verbosity::Verbose {
+                        eprintln!("[VDP] <- SHUTDOWN");
+                    }
                     shutdown.store(true, Ordering::Relaxed);
                     break 'running;
                 }
@@ -326,12 +373,11 @@ fn handle_connection(
             }
         }
         if !tx_bytes.is_empty() {
+            if args.verbosity >= Verbosity::Trace {
+                eprintln!("[VDP] -> UART ({} bytes)", tx_bytes.len());
+            }
             let _ = writer.send(&Message::UartData(tx_bytes));
         }
-
-        // Send CTS status
-        let cts = unsafe { (*vdp.z80_uart0_is_cts)() };
-        // Could send CTS message if needed
 
         // VSYNC and rendering
         if last_vsync.elapsed() >= vsync_interval {
@@ -339,7 +385,14 @@ fn handle_connection(
             unsafe { (*vdp.signal_vblank)() };
 
             // Send VSYNC to eZ80
-            let _ = writer.send(&Message::Vsync);
+            vsync_count += 1;
+            if args.verbosity >= Verbosity::Trace && vsync_count % 60 == 0 {
+                eprintln!("[VDP] VSYNC #{} (~{} seconds)", vsync_count, vsync_count / 60);
+            }
+            if let Err(e) = writer.send(&Message::Vsync) {
+                eprintln!("[VDP] Failed to send VSYNC: {}", e);
+                break 'running;
+            }
 
             // Copy framebuffer
             unsafe {
@@ -361,10 +414,10 @@ fn handle_connection(
                 );
 
                 let _ = canvas.clear();
-                let _ = canvas.copy(&texture,
+                let _ = canvas.copy(texture,
                     sdl3::rect::Rect::new(0, 0, mode_w, mode_h),
                     None);
-                let _ = canvas.present();
+                canvas.present();
             }
 
             last_vsync = last_vsync
@@ -378,7 +431,5 @@ fn handle_connection(
 
     // Cleanup
     let _ = writer.send(&Message::Shutdown);
-    unsafe { (*vdp.vdp_shutdown)() };
-
     Ok(())
 }
