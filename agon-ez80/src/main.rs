@@ -6,7 +6,7 @@ use agon_ez80_emulator::{
     debugger::{DebugCmd, DebugResp, DebuggerConnection, PauseReason, Trigger},
     gpio, AgonMachine, AgonMachineConfig, GpioVgaFrame, RamInit,
 };
-use agon_protocol::{Message, ProtocolError, SocketAddr, SocketConnection, PROTOCOL_VERSION};
+use agon_protocol::{Message, ProtocolError, SocketAddr, SocketListener, PROTOCOL_VERSION};
 use logger::Logger;
 use parse_args::{parse_args, Verbosity};
 use socket_link::{DummySerialLink, SocketState};
@@ -54,8 +54,8 @@ fn main() {
     };
 
     // Determine socket address
-    let addr = if let Some(tcp) = &args.tcp_addr {
-        SocketAddr::tcp(tcp.clone())
+    let addr = if let Some(port) = args.tcp_port {
+        SocketAddr::tcp(format!("0.0.0.0:{}", port))
     } else {
         let path = args
             .socket_path
@@ -72,75 +72,18 @@ fn main() {
         }
     };
 
-    // Connect to VDP
-    logger.verbose(&format!("[PROTO] Connecting to VDP at {}...", addr));
-    if logger.verbosity() < Verbosity::Verbose {
-        eprintln!("Connecting to VDP at {}...", addr);
-    }
-    let mut conn = match SocketConnection::connect(&addr) {
-        Ok(c) => c,
+    // Bind listener
+    let listener = match SocketListener::bind(&addr) {
+        Ok(l) => l,
         Err(e) => {
-            eprintln!("Failed to connect to VDP: {}", e);
-            eprintln!("Make sure the VDP server is running (e.g., agon-vdp-cli)");
+            eprintln!("Failed to bind to {}: {}", addr, e);
             std::process::exit(1);
         }
     };
-    logger.verbose("[PROTO] Connected!");
-    if logger.verbosity() < Verbosity::Verbose {
-        eprintln!("Connected!");
-    }
 
-    // Perform handshake
-    if let Err(e) = perform_handshake(&mut conn, &logger) {
-        eprintln!("Handshake failed: {}", e);
-        std::process::exit(1);
-    }
-    eprintln!("Handshake complete, starting emulation...");
+    eprintln!("Listening on {}", addr);
 
-    // Run the emulator
-    if let Err(e) = run_emulator(conn, args, logger) {
-        eprintln!("Emulator error: {}", e);
-        std::process::exit(1);
-    }
-}
-
-fn perform_handshake(conn: &mut SocketConnection, logger: &Logger) -> Result<(), ProtocolError> {
-    // Send HELLO
-    logger.verbose(&format!("[PROTO] -> HELLO version={}, flags=0", PROTOCOL_VERSION));
-    conn.send(&Message::Hello {
-        version: PROTOCOL_VERSION,
-        flags: 0,
-    })?;
-
-    // Wait for HELLO_ACK
-    let msg = conn.recv()?;
-    match msg {
-        Message::HelloAck {
-            version,
-            capabilities,
-        } => {
-            logger.verbose(&format!("[PROTO] <- HELLO_ACK version={}, caps={}", version, capabilities));
-            if logger.verbosity() < Verbosity::Verbose {
-                eprintln!(
-                    "VDP version {}, capabilities: {}",
-                    version,
-                    if capabilities.is_empty() {
-                        "(none)"
-                    } else {
-                        &capabilities
-                    }
-                );
-            }
-            Ok(())
-        }
-        _ => Err(ProtocolError::InvalidFormat(
-            "Expected HELLO_ACK".to_string(),
-        )),
-    }
-}
-
-fn run_emulator(conn: SocketConnection, args: parse_args::AppArgs, logger: Logger) -> Result<(), ProtocolError> {
-    // Shared state
+    // Shared state for CPU communication (persists across VDP reconnections)
     let socket_state = SocketState::new();
     let soft_reset = Arc::new(AtomicBool::new(false));
     let emulator_shutdown = Arc::new(AtomicBool::new(false));
@@ -203,7 +146,7 @@ fn run_emulator(conn: SocketConnection, args: parse_args::AppArgs, logger: Logge
         None
     };
 
-    // Start CPU thread
+    // Start CPU thread (runs independently of VDP connections)
     let gpios_cpu = gpios.clone();
     let emulator_shutdown_cpu = emulator_shutdown.clone();
     let exit_status_cpu = exit_status.clone();
@@ -261,8 +204,74 @@ fn run_emulator(conn: SocketConnection, args: parse_args::AppArgs, logger: Logge
         }
     });
 
+    eprintln!("eZ80 CPU running, waiting for VDP to connect...");
+
+    // Main server loop - accept VDP connections (supports reconnection)
+    loop {
+        match listener.accept() {
+            Ok(conn) => {
+                logger.verbose("[PROTO] VDP connected");
+                if logger.verbosity() < Verbosity::Verbose {
+                    eprintln!("VDP connected");
+                }
+                if let Err(e) = handle_vdp_session(conn, &socket_state, &gpios, &emulator_shutdown, &logger) {
+                    eprintln!("VDP session error: {}", e);
+                }
+                if emulator_shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                eprintln!("VDP disconnected, waiting for reconnection...");
+            }
+            Err(e) => {
+                eprintln!("Accept error: {}", e);
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+
+    let status = exit_status.load(Ordering::Relaxed);
+    if status != 0 {
+        std::process::exit(status);
+    }
+}
+
+fn handle_vdp_session(
+    conn: agon_protocol::SocketConnection,
+    socket_state: &SocketState,
+    gpios: &Arc<gpio::GpioSet>,
+    emulator_shutdown: &Arc<AtomicBool>,
+    logger: &Logger,
+) -> Result<(), ProtocolError> {
     // Split connection for bidirectional communication
     let (mut reader, mut writer) = conn.split();
+
+    // Wait for HELLO from VDP (VDP is the connector, so it sends HELLO)
+    logger.verbose("[PROTO] Waiting for HELLO from VDP...");
+    let msg = reader.recv()?;
+    match msg {
+        Message::Hello { version, flags } => {
+            logger.verbose(&format!("[PROTO] <- HELLO version={}, flags={}", version, flags));
+            if logger.verbosity() < Verbosity::Verbose {
+                eprintln!("VDP version {}, flags={}", version, flags);
+            }
+        }
+        _ => {
+            return Err(ProtocolError::InvalidFormat(
+                "Expected HELLO from VDP".to_string(),
+            ));
+        }
+    }
+
+    // Send HELLO_ACK
+    let caps = r#"{"type":"ez80","version":"1.0"}"#;
+    writer.send(&Message::HelloAck {
+        version: PROTOCOL_VERSION,
+        capabilities: caps.to_string(),
+    })?;
+    logger.verbose(&format!("[PROTO] -> HELLO_ACK version={}, caps={}", PROTOCOL_VERSION, caps));
+    if logger.verbosity() < Verbosity::Verbose {
+        eprintln!("Handshake complete");
+    }
 
     // Set up reader thread
     let (tx_from_vdp, rx_from_vdp): (Sender<Message>, Receiver<Message>) = mpsc::channel();
@@ -293,6 +302,7 @@ fn run_emulator(conn: SocketConnection, args: parse_args::AppArgs, logger: Logge
 
     while !emulator_shutdown.load(Ordering::Relaxed) {
         // Process messages from VDP
+        let mut vdp_disconnected = false;
         while let Ok(msg) = rx_from_vdp.try_recv() {
             match msg {
                 Message::UartData(data) => {
@@ -317,7 +327,7 @@ fn run_emulator(conn: SocketConnection, args: parse_args::AppArgs, logger: Logge
                     if logger.verbosity() < Verbosity::Verbose {
                         eprintln!("VDP requested shutdown");
                     }
-                    emulator_shutdown.store(true, Ordering::Relaxed);
+                    vdp_disconnected = true;
                     break;
                 }
                 other => {
@@ -325,6 +335,14 @@ fn run_emulator(conn: SocketConnection, args: parse_args::AppArgs, logger: Logge
                 }
             }
         }
+
+        if vdp_disconnected {
+            break;
+        }
+
+        // Check if reader thread has closed (VDP disconnected)
+        // This is detected when try_recv returns Err(TryRecvError::Disconnected)
+        // but we can't easily check that here - we rely on Shutdown message
 
         // Send pending TX bytes to VDP (batched)
         if last_tx_time.elapsed() >= tx_interval {
@@ -346,11 +364,6 @@ fn run_emulator(conn: SocketConnection, args: parse_args::AppArgs, logger: Logge
     // Send shutdown to VDP
     logger.verbose("[PROTO] -> SHUTDOWN");
     let _ = writer.send(&Message::Shutdown);
-
-    let status = exit_status.load(Ordering::Relaxed);
-    if status != 0 {
-        std::process::exit(status);
-    }
 
     Ok(())
 }

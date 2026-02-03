@@ -14,18 +14,26 @@ The VDP (Video Display Processor) has been separated from the eZ80 CPU emulation
 - Support multiple VDP frontends (native SDL, web-based, text-only CLI)
 - Better resource allocation (GPU rendering on capable machine, CPU emulation elsewhere)
 - Mirrors real hardware architecture (eZ80 and ESP32 are separate chips with serial link)
+- **VDP reconnection**: VDPs can disconnect and reconnect without restarting eZ80
+- **WebSocket support**: Browser-based VDPs can connect (browsers can only connect outward)
 
 ## Architecture
+
+The eZ80 acts as the **server** - it listens for VDP connections. VDPs are **clients** that connect to a running eZ80 instance. This allows:
+- VDP to reconnect if it crashes or restarts
+- Multiple VDP implementations to connect to the same eZ80
+- Browser-based WebSocket VDPs (future)
 
 ```
 ┌─────────────────────────┐         ┌─────────────────────────┐
 │      agon-ez80          │         │    agon-vdp-cli         │
-│                         │  Unix   │                         │
+│      (SERVER)           │  Unix   │      (CLIENT)           │
 │  ┌─────────────┐        │ Socket  │  ┌─────────────────┐    │
 │  │ eZ80 CPU    │        │   or    │  │ Text VDP        │    │
 │  │             │ ◄──────┼────────►│  │ (stdout/stdin)  │    │
 │  │ MOS firmware│        │  TCP    │  └─────────────────┘    │
 │  └─────────────┘        │         │                         │
+│  Listens on socket      │         │  Connects to eZ80       │
 └─────────────────────────┘         └─────────────────────────┘
       Machine A                           Machine B
       (or same machine)                   (or same machine)
@@ -42,8 +50,8 @@ pub enum Message {
     UartData(Vec<u8>),      // 0x01: Bidirectional UART bytes
     Vsync,                   // 0x02: VDP → eZ80 frame sync
     Cts(bool),               // 0x03: VDP → eZ80 flow control
-    Hello { version, flags }, // 0x10: eZ80 → VDP handshake
-    HelloAck { version, capabilities }, // 0x11: VDP → eZ80 handshake
+    Hello { version, flags }, // 0x10: Connector → Listener handshake
+    HelloAck { version, capabilities }, // 0x11: Listener → Connector response
     Shutdown,                // 0x20: Either direction
 }
 ```
@@ -52,12 +60,12 @@ Wire format: `[len:u16-LE][type:u8][payload...]`
 
 ### agon-ez80
 
-Standalone eZ80 emulator binary that connects to an external VDP.
+Standalone eZ80 emulator binary that **listens** for VDP connections.
 
 ```bash
 agon-ez80 [OPTIONS]
-  --socket <path>       Unix socket (default: /tmp/agon-vdp.sock)
-  --tcp <host:port>     Use TCP instead
+  --socket <path>       Unix socket to listen on (default: /tmp/agon-vdp.sock)
+  --tcp <port>          Listen on TCP port instead
   --mos <path>          MOS firmware
   --sdcard <path>       SD card directory
   -u, --unlimited       Unlimited CPU speed
@@ -66,18 +74,39 @@ agon-ez80 [OPTIONS]
   --log <file>          Log to file
 ```
 
+Features:
+- CPU starts immediately on launch (no waiting for VDP)
+- Accepts VDP connections (one at a time)
+- Supports VDP reconnection without restarting CPU
+
 ### agon-vdp-cli
 
-Text-only VDP server for terminal/headless operation.
+Text-only VDP client for terminal/headless operation.
+
+```bash
+agon-vdp-cli [OPTIONS]
+  --socket <path>       Unix socket to connect to (default: /tmp/agon-vdp.sock)
+  --tcp <host:port>     Connect via TCP instead
+  -v, -vv, -vvv         Verbosity levels
+  --log <file>          Log to file
+```
+
+Features:
+- Prints VDP text output to stdout
+- Reads keyboard input from stdin
+- Sends VSYNC at ~60Hz
+- Handles VDU commands (color, cursor, system queries)
+- Keyboard events sent with 10ms delays (matching real hardware timing)
+- Auto-reconnects if connection lost
 
 ### agon-vdp-sdl
 
-Graphical VDP server using SDL and the VDP .so library.
+Graphical VDP client using SDL and the VDP .so library.
 
 ```bash
 agon-vdp-sdl [OPTIONS]
-  --socket <path>       Unix socket (default: /tmp/agon-vdp.sock)
-  --tcp <port>          Listen on TCP port
+  --socket <path>       Unix socket to connect to (default: /tmp/agon-vdp.sock)
+  --tcp <host:port>     Connect via TCP instead
   -f, --firmware <name> VDP firmware: console8, quark, electron
   --vdp <path>          Explicit path to VDP .so library
   -v, -vv               Verbosity levels
@@ -90,41 +119,32 @@ Features:
 - Keyboard input via PS/2 scancodes
 - Mouse support
 - Loads VDP .so firmware (console8, quark, electron)
-
-```bash
-agon-vdp-cli [OPTIONS]
-  --socket <path>       Unix socket (default: /tmp/agon-vdp.sock)
-  --tcp <port>          Listen on TCP
-  -v, -vv, -vvv         Verbosity levels
-  --log <file>          Log to file
-```
-
-Features:
-- Prints VDP text output to stdout
-- Reads keyboard input from stdin
-- Sends VSYNC at ~60Hz
-- Handles VDU commands (color, cursor, system queries)
-- Keyboard events sent with 10ms delays (matching real hardware timing)
+- Auto-reconnects if connection lost
+- Continues rendering during reconnect attempts
 
 ## Protocol Details
 
 ### Handshake
 
-1. VDP listens on socket
-2. eZ80 connects
-3. eZ80 sends `HELLO { version: 1, flags: 0 }`
-4. VDP sends `HELLO_ACK { version: 1, capabilities: "{...}" }`
+1. eZ80 listens on socket
+2. VDP connects to eZ80
+3. VDP sends `HELLO { version: 1, flags: 0 }`
+4. eZ80 sends `HELLO_ACK { version: 1, capabilities: "{...}" }`
 5. Normal operation begins
+
+The connector (VDP) sends HELLO first, the listener (eZ80) responds with HELLO_ACK.
 
 ### Capabilities JSON
 
+VDP capabilities (sent in HELLO):
 ```json
 {"type":"cli","cols":80,"rows":25}
+{"type":"sdl","width":640,"height":480,"audio":true}
 ```
 
-Future VDPs might report:
+eZ80 capabilities (sent in HELLO_ACK):
 ```json
-{"type":"gfx","width":640,"height":480,"audio":true}
+{"type":"ez80","version":"1.0"}
 ```
 
 ### Timing
@@ -138,31 +158,60 @@ Future VDPs might report:
 ### Basic Usage (Two Terminals)
 
 ```bash
-# Terminal 1: Start text VDP
-./target/debug/agon-vdp-cli
-
-# Terminal 2: Start eZ80
+# Terminal 1: Start eZ80 (server)
 ./target/debug/agon-ez80 --sdcard ./sdcard
+
+# Terminal 2: Start text VDP (client)
+./target/debug/agon-vdp-cli
+```
+
+### Graphical VDP
+
+```bash
+# Terminal 1: Start eZ80 (server)
+./target/debug/agon-ez80 --sdcard ./sdcard
+
+# Terminal 2: Start graphical VDP (client)
+./target/debug/agon-vdp-sdl
 ```
 
 ### With Debug Logging
 
 ```bash
-# Terminal 1: VDP with trace logging to file
-./target/debug/agon-vdp-cli -vv --log /tmp/vdp.log
-
-# Terminal 2: eZ80 with trace logging
+# Terminal 1: eZ80 with trace logging
 ./target/debug/agon-ez80 --sdcard ./sdcard -vv --log /tmp/ez80.log
+
+# Terminal 2: VDP with trace logging to file
+./target/debug/agon-vdp-cli -vv --log /tmp/vdp.log
 ```
 
 ### TCP Mode (Remote Connection)
 
 ```bash
-# Machine A: VDP listening on TCP
-./target/debug/agon-vdp-cli --tcp 5000
+# Machine A: eZ80 listening on TCP
+./target/debug/agon-ez80 --tcp 5000 --sdcard ./sdcard
 
-# Machine B: eZ80 connecting via TCP
-./target/debug/agon-ez80 --tcp machineA:5000 --sdcard ./sdcard
+# Machine B: VDP connecting via TCP
+./target/debug/agon-vdp-cli --tcp machineA:5000
+# or graphical:
+./target/debug/agon-vdp-sdl --tcp machineA:5000
+```
+
+### VDP Reconnection
+
+If you close and reopen the VDP, it will reconnect to the running eZ80:
+
+```bash
+# Start eZ80
+./target/debug/agon-ez80 --sdcard ./sdcard
+
+# Start VDP (in another terminal)
+./target/debug/agon-vdp-cli
+# ... use it, then Ctrl+C
+
+# Reconnect with graphical VDP
+./target/debug/agon-vdp-sdl
+# Picks up where you left off!
 ```
 
 ## Verified Working
@@ -172,6 +221,7 @@ Future VDPs might report:
 - Navigation (`cd`)
 - CP/M compatibility layer (ZINC)
 - Zork I running under ZINC
+- VDP reconnection (switch between CLI and SDL VDPs)
 
 Example session:
 ```
@@ -199,7 +249,7 @@ fab-agon-emulator/
 │       ├── messages.rs      # Message types & encoding
 │       └── socket.rs        # Unix/TCP socket abstraction
 │
-├── agon-ez80/               # Standalone CPU binary
+├── agon-ez80/               # Standalone CPU binary (SERVER)
 │   ├── Cargo.toml
 │   └── src/
 │       ├── main.rs
@@ -207,7 +257,7 @@ fab-agon-emulator/
 │       ├── logger.rs
 │       └── socket_link.rs   # SerialLink over socket
 │
-├── agon-vdp-cli/            # Text VDP server
+├── agon-vdp-cli/            # Text VDP client
 │   ├── Cargo.toml
 │   └── src/
 │       ├── main.rs
@@ -215,7 +265,7 @@ fab-agon-emulator/
 │       ├── logger.rs
 │       └── text_vdp.rs      # VDU command handling
 │
-├── agon-vdp-sdl/            # Graphical VDP server
+├── agon-vdp-sdl/            # Graphical VDP client
 │   ├── Cargo.toml
 │   └── src/
 │       ├── main.rs
@@ -231,7 +281,6 @@ fab-agon-emulator/
 
 ## Future Work
 
-- **Reconnection support**: Auto-reconnect eZ80 when VDP restarts (and vice versa)
 - Web-based VDP using WebSockets + Canvas/WebGL
 - iOS/Android VDP apps
 - Hardware bridge to connect to real Agon VDP

@@ -11,7 +11,7 @@ pub enum Verbosity {
 
 pub struct AppArgs {
     pub socket_path: Option<String>,
-    pub tcp_port: Option<u16>,
+    pub tcp_addr: Option<String>,
     pub firmware: String,
     pub vdp_path: Option<PathBuf>,
     pub verbosity: Verbosity,
@@ -21,7 +21,7 @@ pub struct AppArgs {
 pub fn parse_args() -> Result<AppArgs, String> {
     let mut args = AppArgs {
         socket_path: None,
-        tcp_port: None,
+        tcp_addr: None,
         firmware: "console8".to_string(),
         vdp_path: None,
         verbosity: Verbosity::Quiet,
@@ -46,13 +46,9 @@ pub fn parse_args() -> Result<AppArgs, String> {
             }
             "--tcp" => {
                 if argv.is_empty() {
-                    return Err("--tcp requires a port number".to_string());
+                    return Err("--tcp requires a host:port".to_string());
                 }
-                args.tcp_port = Some(
-                    argv.remove(0)
-                        .parse()
-                        .map_err(|_| "Invalid port number")?,
-                );
+                args.tcp_addr = Some(argv.remove(0));
             }
             "-f" | "--firmware" => {
                 if argv.is_empty() {
@@ -86,14 +82,16 @@ pub fn parse_args() -> Result<AppArgs, String> {
 
 fn print_help() {
     eprintln!(
-        r#"agon-vdp-sdl - Graphical VDP server for Agon emulator
+        r#"agon-vdp-sdl - Graphical VDP client for Agon emulator
+
+Connects to a running agon-ez80 instance.
 
 USAGE:
     agon-vdp-sdl [OPTIONS]
 
 OPTIONS:
     -s, --socket <path>     Unix socket path (default: /tmp/agon-vdp.sock)
-    --tcp <port>            Listen on TCP port instead of Unix socket
+    --tcp <host:port>       Connect via TCP instead of Unix socket
     -f, --firmware <name>   VDP firmware: console8, quark, electron (default: console8)
     --vdp <path>            Explicit path to VDP .so library
     -v                      Verbose output
@@ -105,8 +103,8 @@ EXAMPLES:
     # Start with default settings (Unix socket)
     agon-vdp-sdl
 
-    # Start with Quark firmware on TCP
-    agon-vdp-sdl --tcp 5000 --firmware quark
+    # Connect to remote eZ80 with Quark firmware
+    agon-vdp-sdl --tcp 192.168.1.100:5000 --firmware quark
 
     # Start with custom VDP library
     agon-vdp-sdl --vdp ./my_vdp.so

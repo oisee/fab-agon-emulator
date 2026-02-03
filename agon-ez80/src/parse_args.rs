@@ -1,7 +1,7 @@
 const HELP: &str = "\
 Agon eZ80 - Standalone eZ80 emulator
 
-Connects to an external VDP server via socket.
+Listens for VDP connections via socket. Start this first, then connect a VDP.
 
 USAGE:
   agon-ez80 [OPTIONS]
@@ -9,7 +9,7 @@ USAGE:
 OPTIONS:
   -h, --help            Prints help information
   --socket <path>       Unix socket path (default: /tmp/agon-vdp.sock)
-  --tcp <host:port>     Use TCP instead of Unix socket
+  --tcp <port>          Listen on TCP port instead of Unix socket
   --mos <path>          Use a different MOS.bin firmware
   --sdcard-img <file>   Use a raw SDCard image rather than the host filesystem
   --sdcard <path>       Sets the path of the emulated SDCard
@@ -45,7 +45,7 @@ impl Default for Verbosity {
 #[derive(Debug)]
 pub struct AppArgs {
     pub socket_path: Option<String>,
-    pub tcp_addr: Option<String>,
+    pub tcp_port: Option<u16>,
     pub sdcard: Option<String>,
     pub sdcard_img: Option<String>,
     pub unlimited_cpu: bool,
@@ -89,7 +89,7 @@ pub fn parse_args() -> Result<AppArgs, pico_args::Error> {
 
     let args = AppArgs {
         socket_path: pargs.opt_value_from_str("--socket")?,
-        tcp_addr: pargs.opt_value_from_str("--tcp")?,
+        tcp_port: pargs.opt_value_from_str("--tcp")?,
         sdcard: pargs.opt_value_from_str("--sdcard")?,
         sdcard_img: pargs.opt_value_from_str("--sdcard-img")?,
         unlimited_cpu: pargs.contains(["-u", "--unlimited-cpu"]),

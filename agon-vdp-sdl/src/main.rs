@@ -1,13 +1,13 @@
-//! Graphical VDP server for Agon emulator.
+//! Graphical VDP client for Agon emulator.
 //!
-//! Loads the VDP .so library and provides graphics/audio over the socket protocol.
+//! Connects to a running agon-ez80 instance and provides graphics/audio.
 
 mod audio;
 mod parse_args;
 mod sdl2ps2;
 mod vdp_interface;
 
-use agon_protocol::{Message, ProtocolError, SocketAddr, SocketConnection, SocketListener, PROTOCOL_VERSION};
+use agon_protocol::{Message, ProtocolError, SocketAddr, SocketConnection, PROTOCOL_VERSION};
 use parse_args::{parse_args, Verbosity};
 use vdp_interface::VdpInterface;
 
@@ -102,7 +102,7 @@ fn main() {
         }
     };
 
-    // Start VDP thread BEFORE accepting connections
+    // Start VDP thread BEFORE connecting
     let vdp_setup = vdp.vdp_setup.clone();
     let vdp_loop_fn = vdp.vdp_loop.clone();
     let _vdp_thread = std::thread::spawn(move || unsafe {
@@ -157,8 +157,8 @@ fn main() {
     eprintln!("VDP ready");
 
     // Determine socket address
-    let addr = if let Some(port) = args.tcp_port {
-        SocketAddr::tcp(format!("0.0.0.0:{}", port))
+    let addr = if let Some(tcp) = &args.tcp_addr {
+        SocketAddr::tcp(tcp.clone())
     } else {
         let path = args
             .socket_path
@@ -175,72 +175,97 @@ fn main() {
         }
     };
 
-    // Bind listener
-    let listener = match SocketListener::bind(&addr) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("Failed to bind to {}: {}", addr, e);
-            std::process::exit(1);
-        }
-    };
-
-    eprintln!("Listening on {}", addr);
-    eprintln!("Waiting for eZ80 to connect...");
-
-    // Accept one connection at a time
+    // Main connection loop - supports reconnection
     loop {
-        match listener.accept() {
+        eprintln!("Connecting to eZ80 at {}...", addr);
+
+        match SocketConnection::connect(&addr) {
             Ok(conn) => {
-                eprintln!("Connection accepted");
+                eprintln!("Connected!");
                 if let Err(e) = run_session(conn, &vdp, &args, &mut event_pump, &mut canvas, &mut texture) {
                     eprintln!("Session error: {}", e);
                 }
-                eprintln!("Connection closed, waiting for new connection...");
+                eprintln!("Disconnected from eZ80, reconnecting...");
             }
             Err(e) => {
-                eprintln!("Accept error: {}", e);
-                std::thread::sleep(Duration::from_millis(100));
+                eprintln!("Failed to connect: {} (retrying in 1s)", e);
             }
+        }
+
+        // Keep rendering during reconnect attempts
+        for _ in 0..60 {  // ~1 second
+            for event in event_pump.poll_iter() {
+                if let Event::Quit { .. } = event {
+                    std::process::exit(0);
+                }
+            }
+
+            unsafe { (*vdp.signal_vblank)() };
+            unsafe {
+                (*vdp.copyVgaFramebuffer)(
+                    &mut mode_w,
+                    &mut mode_h,
+                    vgabuf.as_mut_ptr(),
+                    &mut frame_rate_hz,
+                );
+            }
+
+            if mode_w > 0 && mode_h > 0 {
+                let pitch = mode_w as usize * 3;
+                let _ = texture.update(
+                    sdl3::rect::Rect::new(0, 0, mode_w, mode_h),
+                    &vgabuf[..pitch * mode_h as usize],
+                    pitch,
+                );
+                let _ = canvas.clear();
+                let _ = canvas.copy(&texture,
+                    sdl3::rect::Rect::new(0, 0, mode_w, mode_h),
+                    None);
+                canvas.present();
+            }
+
+            std::thread::sleep(Duration::from_millis(16));
         }
     }
 }
 
 fn run_session(
-    conn: SocketConnection,
+    mut conn: SocketConnection,
     vdp: &VdpInterface,
     args: &parse_args::AppArgs,
     event_pump: &mut sdl3::EventPump,
     canvas: &mut sdl3::render::Canvas<sdl3::video::Window>,
     texture: &mut sdl3::render::Texture,
 ) -> Result<(), ProtocolError> {
+    // Perform handshake (as connector, we send HELLO first)
+    let caps = r#"{"type":"sdl","width":640,"height":480,"audio":true}"#;
+    if args.verbosity >= Verbosity::Verbose {
+        eprintln!("[VDP] -> HELLO version={}, flags=0", PROTOCOL_VERSION);
+    }
+    conn.send(&Message::Hello {
+        version: PROTOCOL_VERSION,
+        flags: 0,
+    })?;
+
+    // Wait for HELLO_ACK
+    let msg = conn.recv()?;
+    match msg {
+        Message::HelloAck { version, capabilities } => {
+            if args.verbosity >= Verbosity::Verbose {
+                eprintln!("[VDP] <- HELLO_ACK version={}, caps={}", version, capabilities);
+            }
+            eprintln!("eZ80 version {}, capabilities: {}", version, if capabilities.is_empty() { "(none)" } else { &capabilities });
+        }
+        _ => {
+            return Err(ProtocolError::InvalidFormat("Expected HELLO_ACK".to_string()));
+        }
+    }
+    eprintln!("Handshake complete");
+
     let shutdown = Arc::new(AtomicBool::new(false));
 
     // Split connection
     let (mut reader, mut writer) = conn.split();
-
-    // Wait for HELLO
-    eprintln!("Waiting for HELLO...");
-    let msg = reader.recv()?;
-    match msg {
-        Message::Hello { version, flags } => {
-            if args.verbosity >= Verbosity::Verbose {
-                eprintln!("Received HELLO: version={}, flags={}", version, flags);
-            }
-        }
-        _ => {
-            return Err(ProtocolError::InvalidFormat("Expected HELLO".to_string()));
-        }
-    }
-
-    // Send HELLO_ACK
-    let caps = r#"{"type":"sdl","width":640,"height":480,"audio":true}"#;
-    writer.send(&Message::HelloAck {
-        version: PROTOCOL_VERSION,
-        capabilities: caps.to_string(),
-    })?;
-    if args.verbosity >= Verbosity::Verbose {
-        eprintln!("Sent HELLO_ACK");
-    }
 
     // Set up socket reader thread
     let (tx_from_ez80, rx_from_ez80): (Sender<Message>, Receiver<Message>) = mpsc::channel();

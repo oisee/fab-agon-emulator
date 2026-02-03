@@ -1,5 +1,7 @@
 const HELP: &str = "\
-Agon VDP CLI - Text-only VDP server
+Agon VDP CLI - Text-only VDP client
+
+Connects to a running agon-ez80 instance.
 
 USAGE:
   agon-vdp-cli [OPTIONS]
@@ -7,7 +9,7 @@ USAGE:
 OPTIONS:
   -h, --help            Prints help information
   --socket <path>       Unix socket path (default: /tmp/agon-vdp.sock)
-  --tcp <port>          Listen on TCP port instead of Unix socket
+  --tcp <host:port>     Connect via TCP instead of Unix socket
   -v, --verbose         Show connection and protocol events
   -vv, --trace          Show all protocol messages
   -vvv, --trace-uart    Show individual UART bytes (very verbose)
@@ -36,7 +38,7 @@ impl Default for Verbosity {
 #[derive(Debug)]
 pub struct AppArgs {
     pub socket_path: Option<String>,
-    pub tcp_port: Option<u16>,
+    pub tcp_addr: Option<String>,
     pub verbosity: Verbosity,
     pub log_file: Option<String>,
 }
@@ -62,7 +64,7 @@ pub fn parse_args() -> Result<AppArgs, pico_args::Error> {
 
     let args = AppArgs {
         socket_path: pargs.opt_value_from_str("--socket")?,
-        tcp_port: pargs.opt_value_from_str("--tcp")?,
+        tcp_addr: pargs.opt_value_from_str("--tcp")?,
         verbosity,
         log_file: pargs.opt_value_from_str("--log")?,
     };

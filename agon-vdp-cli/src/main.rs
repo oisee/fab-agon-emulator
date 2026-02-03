@@ -2,7 +2,7 @@ mod logger;
 mod parse_args;
 mod text_vdp;
 
-use agon_protocol::{Message, ProtocolError, SocketAddr, SocketConnection, SocketListener, PROTOCOL_VERSION};
+use agon_protocol::{Message, ProtocolError, SocketAddr, SocketConnection, PROTOCOL_VERSION};
 use logger::Logger;
 use parse_args::{parse_args, Verbosity};
 use text_vdp::TextVdp;
@@ -40,11 +40,12 @@ fn main() {
     };
 
     // Determine socket address
-    let addr = if let Some(port) = args.tcp_port {
-        SocketAddr::tcp(format!("0.0.0.0:{}", port))
+    let addr = if let Some(tcp) = &args.tcp_addr {
+        SocketAddr::tcp(tcp.clone())
     } else {
         let path = args
             .socket_path
+            .clone()
             .unwrap_or_else(|| agon_protocol::socket::DEFAULT_SOCKET_PATH.to_string());
         #[cfg(unix)]
         {
@@ -57,36 +58,30 @@ fn main() {
         }
     };
 
-    // Bind listener
-    let listener = match SocketListener::bind(&addr) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("Failed to bind to {}: {}", addr, e);
-            std::process::exit(1);
-        }
-    };
-
-    eprintln!("Listening on {}", addr);
-    eprintln!("Waiting for eZ80 to connect...");
-
-    // Main server loop - accept connections one at a time
+    // Main connection loop - supports reconnection
     loop {
-        match listener.accept() {
+        logger.verbose(&format!("[PROTO] Connecting to eZ80 at {}...", addr));
+        if logger.verbosity() < Verbosity::Verbose {
+            eprintln!("Connecting to eZ80 at {}...", addr);
+        }
+
+        match SocketConnection::connect(&addr) {
             Ok(conn) => {
-                logger.verbose("[PROTO] Connection accepted");
+                logger.verbose("[PROTO] Connected!");
                 if logger.verbosity() < Verbosity::Verbose {
-                    eprintln!("Connection accepted");
+                    eprintln!("Connected!");
                 }
-                if let Err(e) = handle_connection(conn, &logger) {
-                    eprintln!("Connection error: {}", e);
+                if let Err(e) = run_session(conn, &logger) {
+                    eprintln!("Session error: {}", e);
                 }
-                eprintln!("Connection closed, waiting for new connection...");
+                eprintln!("Disconnected from eZ80, reconnecting...");
             }
             Err(e) => {
-                eprintln!("Accept error: {}", e);
-                std::thread::sleep(Duration::from_millis(100));
+                eprintln!("Failed to connect: {} (retrying in 1s)", e);
             }
         }
+
+        std::thread::sleep(Duration::from_secs(1));
     }
 }
 
@@ -99,7 +94,32 @@ fn fmt_hex(bytes: &[u8]) -> String {
         .join(" ")
 }
 
-fn handle_connection(conn: SocketConnection, logger: &Logger) -> Result<(), ProtocolError> {
+fn run_session(mut conn: SocketConnection, logger: &Logger) -> Result<(), ProtocolError> {
+    // Perform handshake (as connector, we send HELLO first)
+    let caps = r#"{"type":"cli","cols":80,"rows":25}"#;
+    logger.verbose(&format!("[PROTO] -> HELLO version={}, flags=0", PROTOCOL_VERSION));
+    conn.send(&Message::Hello {
+        version: PROTOCOL_VERSION,
+        flags: 0,
+    })?;
+
+    // Wait for HELLO_ACK
+    let msg = conn.recv()?;
+    match msg {
+        Message::HelloAck { version, capabilities } => {
+            logger.verbose(&format!("[PROTO] <- HELLO_ACK version={}, caps={}", version, capabilities));
+            if logger.verbosity() < Verbosity::Verbose {
+                eprintln!("eZ80 version {}, capabilities: {}", version, if capabilities.is_empty() { "(none)" } else { &capabilities });
+            }
+        }
+        _ => {
+            return Err(ProtocolError::InvalidFormat(
+                "Expected HELLO_ACK".to_string(),
+            ));
+        }
+    }
+    eprintln!("Handshake complete");
+
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();
 
@@ -123,37 +143,6 @@ fn handle_connection(conn: SocketConnection, logger: &Logger) -> Result<(), Prot
 
     // Split connection for bidirectional communication
     let (mut reader, mut writer) = conn.split();
-
-    // Wait for HELLO from eZ80
-    logger.verbose("[PROTO] Waiting for HELLO...");
-    if logger.verbosity() < Verbosity::Verbose {
-        eprintln!("Waiting for HELLO...");
-    }
-    let msg = reader.recv()?;
-    match msg {
-        Message::Hello { version, flags } => {
-            logger.verbose(&format!("[PROTO] <- HELLO version={}, flags={}", version, flags));
-            if logger.verbosity() < Verbosity::Verbose {
-                eprintln!("Received HELLO: version={}, flags={}", version, flags);
-            }
-        }
-        _ => {
-            return Err(ProtocolError::InvalidFormat(
-                "Expected HELLO message".to_string(),
-            ));
-        }
-    }
-
-    // Send HELLO_ACK
-    let caps = r#"{"type":"cli","cols":80,"rows":25}"#;
-    writer.send(&Message::HelloAck {
-        version: PROTOCOL_VERSION,
-        capabilities: caps.to_string(),
-    })?;
-    logger.verbose(&format!("[PROTO] -> HELLO_ACK version={}, caps={}", PROTOCOL_VERSION, caps));
-    if logger.verbosity() < Verbosity::Verbose {
-        eprintln!("Sent HELLO_ACK");
-    }
 
     // Create text VDP
     let mut vdp = TextVdp::new(logger.clone());
