@@ -47,6 +47,25 @@ West of House
 You are standing in an open field west of a white house...
 ```
 
+## WebSocket Support (Experimental)
+
+The eZ80 emulator can accept WebSocket connections, enabling browser-based VDP clients:
+
+```bash
+# Start eZ80 with WebSocket listener
+./target/release/agon-ez80 --websocket 8080 --sdcard ./sdcard
+
+# Serve the web VDP client
+cd web-vdp && python3 -m http.server 8000
+
+# Open browser to http://localhost:8000
+# Enter ws://localhost:8080 and click Connect
+```
+
+See [WebSocket VDP Support](./reports/2026-02-03-002-websocket-vdp-support.md) for details.
+
+**Note**: The web VDP is a work-in-progress prototype. For full functionality, use `agon-vdp-cli` or `agon-vdp-sdl`.
+
 ## Keyboard Shortcuts
 
 Emulator shortcuts are accessed with the *right ctrl*.

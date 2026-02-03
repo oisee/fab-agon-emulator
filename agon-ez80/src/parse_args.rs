@@ -10,6 +10,7 @@ OPTIONS:
   -h, --help            Prints help information
   --socket <path>       Unix socket path (default: /tmp/agon-vdp.sock)
   --tcp <port>          Listen on TCP port instead of Unix socket
+  --websocket <port>    Listen for WebSocket connections on port (for web VDPs)
   --mos <path>          Use a different MOS.bin firmware
   --sdcard-img <file>   Use a raw SDCard image rather than the host filesystem
   --sdcard <path>       Sets the path of the emulated SDCard
@@ -46,6 +47,7 @@ impl Default for Verbosity {
 pub struct AppArgs {
     pub socket_path: Option<String>,
     pub tcp_port: Option<u16>,
+    pub websocket_port: Option<u16>,
     pub sdcard: Option<String>,
     pub sdcard_img: Option<String>,
     pub unlimited_cpu: bool,
@@ -90,6 +92,7 @@ pub fn parse_args() -> Result<AppArgs, pico_args::Error> {
     let args = AppArgs {
         socket_path: pargs.opt_value_from_str("--socket")?,
         tcp_port: pargs.opt_value_from_str("--tcp")?,
+        websocket_port: pargs.opt_value_from_str("--websocket")?,
         sdcard: pargs.opt_value_from_str("--sdcard")?,
         sdcard_img: pargs.opt_value_from_str("--sdcard-img")?,
         unlimited_cpu: pargs.contains(["-u", "--unlimited-cpu"]),

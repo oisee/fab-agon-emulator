@@ -22,6 +22,8 @@
 
 mod messages;
 pub mod socket;
+pub mod websocket;
 
 pub use messages::{Message, ProtocolError, PROTOCOL_VERSION};
 pub use socket::{SocketAddr, SocketConnection, SocketListener, SocketReader, SocketWriter};
+pub use websocket::{WebSocketConnection, WebSocketListener};

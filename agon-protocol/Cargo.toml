@@ -7,3 +7,4 @@ license.workspace = true
 description = "Protocol library for eZ80/VDP communication over sockets"
 
 [dependencies]
+tungstenite = "0.21"
