@@ -91,8 +91,6 @@ fn main() {
     let gpios = Arc::new(gpio::GpioSet::new());
     let ez80_paused = Arc::new(AtomicBool::new(false));
 
-    let (tx_gpio_vga_frame, rx_gpio_vga_frame) = mpsc::channel::<GpioVgaFrame>();
-
     // Default firmware path
     let default_firmware = match PREFIX {
         None => std::path::Path::new(".")
@@ -104,107 +102,10 @@ fn main() {
             .join("mos_console8.bin"),
     };
 
-    // Set up debugger if requested
-    let (tx_cmd_debugger, rx_cmd_debugger): (Sender<DebugCmd>, Receiver<DebugCmd>) =
-        mpsc::channel();
-    let (tx_resp_debugger, rx_resp_debugger): (Sender<DebugResp>, Receiver<DebugResp>) =
-        mpsc::channel();
+    eprintln!("Waiting for VDP to connect...");
 
-    let debugger_con = if args.debugger {
-        let _ez80_paused = ez80_paused.clone();
-        let _emulator_shutdown = emulator_shutdown.clone();
-        let _breakpoints = args.breakpoints.clone();
-        let _tx_cmd = tx_cmd_debugger.clone();
-
-        std::thread::spawn(move || {
-            // Set initial breakpoints
-            for bp in _breakpoints {
-                let trigger = Trigger {
-                    address: bp,
-                    once: false,
-                    actions: vec![
-                        DebugCmd::Pause(PauseReason::DebuggerBreakpoint),
-                        DebugCmd::GetState,
-                    ],
-                };
-                let _ = _tx_cmd.send(DebugCmd::AddTrigger(trigger));
-            }
-
-            agon_light_emulator_debugger::start(
-                _tx_cmd,
-                rx_resp_debugger,
-                _emulator_shutdown,
-                _ez80_paused.load(Ordering::Relaxed),
-            );
-        });
-
-        Some(DebuggerConnection {
-            tx: tx_resp_debugger,
-            rx: rx_cmd_debugger,
-        })
-    } else {
-        None
-    };
-
-    // Start CPU thread (runs independently of VDP connections)
-    let gpios_cpu = gpios.clone();
-    let emulator_shutdown_cpu = emulator_shutdown.clone();
-    let exit_status_cpu = exit_status.clone();
-    let ez80_paused_cpu = ez80_paused.clone();
-    let uart0_link = socket_state.create_serial_link();
-
-    let _cpu_thread = std::thread::spawn(move || {
-        let mut machine = AgonMachine::new(AgonMachineConfig {
-            ram_init: if args.zero {
-                RamInit::Zero
-            } else {
-                RamInit::Random
-            },
-            uart0_link: Box::new(uart0_link),
-            uart1_link: Box::new(DummySerialLink),
-            soft_reset,
-            exit_status: exit_status_cpu,
-            paused: ez80_paused_cpu,
-            emulator_shutdown: emulator_shutdown_cpu,
-            gpios: gpios_cpu,
-            tx_gpio_vga_frame,
-            interrupt_precision: 16,
-            clockspeed_hz: if args.unlimited_cpu {
-                1_000_000_000
-            } else {
-                18_432_000
-            },
-            mos_bin: args.mos_bin.unwrap_or(default_firmware),
-        });
-
-        if let Some(f) = args.sdcard_img {
-            match std::fs::File::options().read(true).write(true).open(&f) {
-                Ok(file) => machine.set_sdcard_image(Some(file)),
-                Err(e) => {
-                    eprintln!("Could not open sdcard image '{}': {:?}", f, e);
-                    std::process::exit(1);
-                }
-            }
-        } else {
-            machine.set_sdcard_directory(match args.sdcard {
-                Some(dir) => std::path::PathBuf::from(dir),
-                None => std::env::current_dir().unwrap(),
-            });
-        }
-
-        machine.start(debugger_con);
-    });
-
-    // Ignore GPIO VGA frames (only relevant for GPIO video mode)
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_millis(50));
-        match rx_gpio_vga_frame.recv() {
-            Ok(_) => {}
-            Err(_) => break,
-        }
-    });
-
-    eprintln!("eZ80 CPU running, waiting for VDP to connect...");
+    // Track if CPU has been started (only start on first VDP connection)
+    let mut cpu_started = false;
 
     // Main server loop - accept VDP connections (supports reconnection)
     loop {
@@ -214,6 +115,120 @@ fn main() {
                 if logger.verbosity() < Verbosity::Verbose {
                     eprintln!("VDP connected");
                 }
+
+                // Start CPU on first VDP connection (so MOS can boot with VDP available)
+                if !cpu_started {
+                    // Set up debugger if requested
+                    let (tx_cmd_debugger, rx_cmd_debugger): (Sender<DebugCmd>, Receiver<DebugCmd>) =
+                        mpsc::channel();
+                    let (tx_resp_debugger, rx_resp_debugger): (Sender<DebugResp>, Receiver<DebugResp>) =
+                        mpsc::channel();
+
+                    let debugger_con = if args.debugger {
+                        let _ez80_paused = ez80_paused.clone();
+                        let _emulator_shutdown = emulator_shutdown.clone();
+                        let _breakpoints = args.breakpoints.clone();
+                        let _tx_cmd = tx_cmd_debugger.clone();
+
+                        std::thread::spawn(move || {
+                            // Set initial breakpoints
+                            for bp in _breakpoints {
+                                let trigger = Trigger {
+                                    address: bp,
+                                    once: false,
+                                    actions: vec![
+                                        DebugCmd::Pause(PauseReason::DebuggerBreakpoint),
+                                        DebugCmd::GetState,
+                                    ],
+                                };
+                                let _ = _tx_cmd.send(DebugCmd::AddTrigger(trigger));
+                            }
+
+                            agon_light_emulator_debugger::start(
+                                _tx_cmd,
+                                rx_resp_debugger,
+                                _emulator_shutdown,
+                                _ez80_paused.load(Ordering::Relaxed),
+                            );
+                        });
+
+                        Some(DebuggerConnection {
+                            tx: tx_resp_debugger,
+                            rx: rx_cmd_debugger,
+                        })
+                    } else {
+                        None
+                    };
+
+                    let (tx_gpio_vga_frame, rx_gpio_vga_frame) = mpsc::channel::<GpioVgaFrame>();
+
+                    // Ignore GPIO VGA frames (only relevant for GPIO video mode)
+                    std::thread::spawn(move || loop {
+                        std::thread::sleep(Duration::from_millis(50));
+                        match rx_gpio_vga_frame.recv() {
+                            Ok(_) => {}
+                            Err(_) => break,
+                        }
+                    });
+
+                    let gpios_cpu = gpios.clone();
+                    let emulator_shutdown_cpu = emulator_shutdown.clone();
+                    let exit_status_cpu = exit_status.clone();
+                    let ez80_paused_cpu = ez80_paused.clone();
+                    let soft_reset_cpu = soft_reset.clone();
+                    let uart0_link = socket_state.create_serial_link();
+                    let mos_bin = args.mos_bin.clone().unwrap_or_else(|| default_firmware.clone());
+                    let sdcard = args.sdcard.clone();
+                    let sdcard_img = args.sdcard_img.clone();
+                    let unlimited_cpu = args.unlimited_cpu;
+                    let zero = args.zero;
+
+                    std::thread::spawn(move || {
+                        let mut machine = AgonMachine::new(AgonMachineConfig {
+                            ram_init: if zero {
+                                RamInit::Zero
+                            } else {
+                                RamInit::Random
+                            },
+                            uart0_link: Box::new(uart0_link),
+                            uart1_link: Box::new(DummySerialLink),
+                            soft_reset: soft_reset_cpu,
+                            exit_status: exit_status_cpu,
+                            paused: ez80_paused_cpu,
+                            emulator_shutdown: emulator_shutdown_cpu,
+                            gpios: gpios_cpu,
+                            tx_gpio_vga_frame,
+                            interrupt_precision: 16,
+                            clockspeed_hz: if unlimited_cpu {
+                                1_000_000_000
+                            } else {
+                                18_432_000
+                            },
+                            mos_bin,
+                        });
+
+                        if let Some(f) = sdcard_img {
+                            match std::fs::File::options().read(true).write(true).open(&f) {
+                                Ok(file) => machine.set_sdcard_image(Some(file)),
+                                Err(e) => {
+                                    eprintln!("Could not open sdcard image '{}': {:?}", f, e);
+                                    std::process::exit(1);
+                                }
+                            }
+                        } else {
+                            machine.set_sdcard_directory(match sdcard {
+                                Some(dir) => std::path::PathBuf::from(dir),
+                                None => std::env::current_dir().unwrap(),
+                            });
+                        }
+
+                        machine.start(debugger_con);
+                    });
+
+                    cpu_started = true;
+                    eprintln!("eZ80 CPU started");
+                }
+
                 if let Err(e) = handle_vdp_session(conn, &socket_state, &gpios, &emulator_shutdown, &logger) {
                     eprintln!("VDP session error: {}", e);
                 }
@@ -339,10 +354,6 @@ fn handle_vdp_session(
         if vdp_disconnected {
             break;
         }
-
-        // Check if reader thread has closed (VDP disconnected)
-        // This is detected when try_recv returns Err(TryRecvError::Disconnected)
-        // but we can't easily check that here - we rely on Shutdown message
 
         // Send pending TX bytes to VDP (batched)
         if last_tx_time.elapsed() >= tx_interval {
