@@ -1,0 +1,31 @@
+[package]
+name = "agon-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "Agon emulator compiled to WebAssembly"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "console",
+    "Window",
+    "Performance",
+] }
+
+# Use getrandom with js feature for WASM
+getrandom = { version = "0.2", features = ["js"] }
+rand = "0.8"
+
+# Core eZ80 emulation (no file I/O)
+ez80 = { git = "https://github.com/tomm/ez80.git", rev = "2bd9d08b206bc48525d078a1baac2698a2b7f0a8" }
+
+# Better panic messages in browser
+console_error_panic_hook = "0.1"
+
+[profile.release]
+opt-level = "s"
+lto = true

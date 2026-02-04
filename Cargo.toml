@@ -8,6 +8,7 @@ members = [
     "agon-vdp-cli",
     "agon-vdp-sdl",
     "agon-ez80",
+    "agon-wasm",
 ]
 
 [workspace.package]

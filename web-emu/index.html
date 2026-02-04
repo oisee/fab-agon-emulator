@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agon Light Emulator - WASM</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css" />
+    <style>
+        body {
+            background-color: #1a1a2e;
+            color: #eee;
+            font-family: monospace;
+            padding: 20px;
+            margin: 0;
+        }
+        h1 {
+            color: #00ff88;
+            margin-bottom: 10px;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        #status {
+            background: #2a2a4e;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        #terminal {
+            border: 2px solid #00ff88;
+            border-radius: 4px;
+        }
+        .controls {
+            margin: 10px 0;
+        }
+        button {
+            background: #00ff88;
+            color: #1a1a2e;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: monospace;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #00cc66;
+        }
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        .info {
+            font-size: 0.9em;
+            color: #888;
+            margin-top: 10px;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .file-label {
+            background: #4a4a8e;
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            display: inline-block;
+            margin-right: 10px;
+        }
+        .file-label:hover {
+            background: #5a5a9e;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Agon Light Emulator (WASM)</h1>
+
+        <div id="status">Status: Loading WASM module...</div>
+
+        <div class="controls">
+            <label class="file-label">
+                Load MOS Firmware
+                <input type="file" id="mosFile" accept=".bin">
+            </label>
+            <button id="startBtn" disabled>Start</button>
+            <button id="resetBtn" disabled>Reset</button>
+        </div>
+
+        <div id="terminal"></div>
+
+        <div class="info">
+            <p>Cycles: <span id="cycles">0</span></p>
+            <p>Instructions:</p>
+            <ol>
+                <li>Load a MOS firmware binary (.bin file)</li>
+                <li>Click Start to begin emulation</li>
+                <li>Type to send keyboard input</li>
+            </ol>
+            <p>Note: This is a minimal eZ80 emulator. For full Agon emulation including graphics, use the native emulator.</p>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.min.js"></script>
+    <script type="module">
+        import init, { AgonEmulator } from './pkg/agon_wasm.js';
+
+        let emulator = null;
+        let running = false;
+        let term = null;
+        let animationId = null;
+
+        const status = document.getElementById('status');
+        const startBtn = document.getElementById('startBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const mosFile = document.getElementById('mosFile');
+        const cyclesSpan = document.getElementById('cycles');
+
+        // Initialize xterm.js
+        term = new Terminal({
+            cols: 80,
+            rows: 25,
+            cursorBlink: true,
+            fontSize: 14,
+            fontFamily: 'monospace',
+            theme: {
+                background: '#1a1a2e',
+                foreground: '#00ff88',
+                cursor: '#00ff88'
+            }
+        });
+        term.open(document.getElementById('terminal'));
+        term.writeln('Agon Light Emulator - WASM Edition');
+        term.writeln('Load MOS firmware to begin...');
+
+        // Initialize WASM module
+        init().then(async () => {
+            emulator = new AgonEmulator();
+            console.log('Emulator created');
+
+            // Try to load MOS.bin automatically
+            try {
+                const response = await fetch('./MOS.bin');
+                if (response.ok) {
+                    const data = await response.arrayBuffer();
+                    const bytes = new Uint8Array(data);
+                    emulator.load_mos(bytes);
+                    status.textContent = `Status: Loaded MOS.bin (${bytes.length} bytes). Ready to start.`;
+                    startBtn.disabled = false;
+                    resetBtn.disabled = false;
+                    term.clear();
+                    term.writeln('Auto-loaded MOS.bin');
+                    term.writeln('Click Start to begin emulation.');
+                } else {
+                    status.textContent = 'Status: WASM loaded. Load MOS firmware to begin.';
+                }
+            } catch (e) {
+                status.textContent = 'Status: WASM loaded. Load MOS firmware to begin.';
+                console.log('MOS.bin not available, user must load manually');
+            }
+        }).catch(err => {
+            status.textContent = 'Status: Error loading WASM: ' + err;
+            console.error(err);
+        });
+
+        // Handle MOS file loading
+        mosFile.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const data = await file.arrayBuffer();
+            const bytes = new Uint8Array(data);
+
+            emulator.load_mos(bytes);
+            status.textContent = `Status: Loaded ${file.name} (${bytes.length} bytes). Ready to start.`;
+            startBtn.disabled = false;
+            resetBtn.disabled = false;
+            term.clear();
+            term.writeln(`Loaded: ${file.name}`);
+            term.writeln('Click Start to begin emulation.');
+        });
+
+        // Start button
+        startBtn.addEventListener('click', () => {
+            if (running) {
+                running = false;
+                startBtn.textContent = 'Start';
+                status.textContent = 'Status: Paused';
+                if (animationId) {
+                    cancelAnimationFrame(animationId);
+                    animationId = null;
+                }
+            } else {
+                running = true;
+                startBtn.textContent = 'Pause';
+                status.textContent = 'Status: Running';
+
+                // Send initial VDP ready signal
+                // MOS polls VDP with VDU 23,0,0x86 early in boot
+                // We preemptively send a "general poll" response
+                sendVdpResponse(0x00, [
+                    1,     // VDP protocol version
+                    80,    // Cols
+                    25,    // Rows
+                    0, 0, 0, 0, 0, 0  // Padding
+                ]);
+
+                runEmulation();
+            }
+        });
+
+        // Reset button
+        resetBtn.addEventListener('click', () => {
+            emulator.reset();
+            term.clear();
+            term.writeln('Emulator reset.');
+            status.textContent = 'Status: Reset. Click Start to begin.';
+            running = false;
+            startBtn.textContent = 'Start';
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+        });
+
+        // Keyboard input
+        term.onData(data => {
+            if (!running || !emulator) return;
+
+            for (let i = 0; i < data.length; i++) {
+                const code = data.charCodeAt(i);
+                // Send as VDP key packet
+                emulator.send_key(code, true);
+                // Send key up after a short delay
+                setTimeout(() => {
+                    if (emulator) emulator.send_key(code, false);
+                }, 50);
+            }
+        });
+
+        // Main emulation loop
+        function runEmulation() {
+            if (!running || !emulator) return;
+
+            // Run ~18432 cycles per frame at 60fps = ~18.432 MHz
+            const cyclesPerFrame = 307200; // ~18.432 MHz / 60 fps
+            emulator.run_cycles(cyclesPerFrame);
+
+            // Process output
+            const output = emulator.get_output();
+            if (output.length > 0) {
+                // Parse VDU commands for basic terminal output
+                processOutput(output);
+            }
+
+            // Update cycle counter
+            cyclesSpan.textContent = emulator.get_cycles().toLocaleString();
+
+            animationId = requestAnimationFrame(runEmulation);
+        }
+
+        // VDP emulation - handles system queries from MOS
+        const vdpState = {
+            cursorX: 0,
+            cursorY: 0,
+            screenWidth: 80,
+            screenHeight: 25,
+            rtc: { year: 2026, month: 2, day: 3, hour: 12, minute: 0, second: 0 }
+        };
+
+        // Send VDP response packet to emulator
+        function sendVdpResponse(cmd, data) {
+            // VDP packet format: 0x80 + cmd, length, data...
+            emulator.send_byte(0x80 + cmd);
+            emulator.send_byte(data.length);
+            for (const byte of data) {
+                emulator.send_byte(byte);
+            }
+        }
+
+        // Handle VDP system commands (VDU 23, 0, ...)
+        function handleVdpCommand(cmd, args) {
+            switch (cmd) {
+                case 0x80: // General VDP packet command
+                    // Sub-command is in args[0]
+                    if (args.length > 0) {
+                        handleVdpPacketCommand(args[0], args.slice(1));
+                    }
+                    break;
+                case 0x81: // Get cursor position
+                    sendVdpResponse(0x81, [vdpState.cursorX, vdpState.cursorY]);
+                    break;
+                case 0x82: // Get character at cursor
+                    sendVdpResponse(0x82, [0x20]); // Space
+                    break;
+                case 0x83: // Get pixel
+                    sendVdpResponse(0x83, [0, 0, 0, 0]); // RGBA
+                    break;
+                case 0x84: // Get audio status
+                    sendVdpResponse(0x84, [1]); // Audio enabled
+                    break;
+                case 0x85: // Get mode info
+                    sendVdpResponse(0x85, [
+                        vdpState.screenWidth & 0xFF,
+                        (vdpState.screenWidth >> 8) & 0xFF,
+                        vdpState.screenHeight & 0xFF,
+                        (vdpState.screenHeight >> 8) & 0xFF,
+                        80, 25, // Cols, rows
+                        8, 16,  // Char width, height
+                        0, 64   // Colors, flags
+                    ]);
+                    break;
+                case 0x86: // Get screen dimensions
+                    sendVdpResponse(0x86, [
+                        vdpState.screenWidth & 0xFF,
+                        (vdpState.screenWidth >> 8) & 0xFF,
+                        vdpState.screenHeight & 0xFF,
+                        (vdpState.screenHeight >> 8) & 0xFF,
+                        80, 25  // Text cols/rows
+                    ]);
+                    break;
+                case 0x87: // Get RTC
+                    sendVdpResponse(0x87, [
+                        vdpState.rtc.year & 0xFF,
+                        (vdpState.rtc.year >> 8) & 0xFF,
+                        vdpState.rtc.month,
+                        vdpState.rtc.day,
+                        0, // Day of week
+                        vdpState.rtc.hour,
+                        vdpState.rtc.minute,
+                        vdpState.rtc.second
+                    ]);
+                    break;
+                case 0x88: // Get keyboard layout
+                    sendVdpResponse(0x88, [0]); // UK layout
+                    break;
+                case 0x89: // Get UART
+                case 0x8A: // Get keyboard repeat
+                    sendVdpResponse(cmd, [0]);
+                    break;
+                case 0xFF: // Terminal mode switch
+                    // Acknowledge terminal mode
+                    break;
+            }
+        }
+
+        function handleVdpPacketCommand(subcmd, args) {
+            // Handle specific packet sub-commands
+        }
+
+        // VDU command parser state machine
+        const VDU_IDLE = 0;
+        const VDU_COLLECTING = 1;
+        const VDU_23_FIRST = 2;   // Waiting for first byte after VDU 23
+        const VDU_23_SYSCMD = 3;  // Waiting for system command byte
+        const VDU_23_ARGS = 4;    // Collecting system command args
+
+        let vduState = VDU_IDLE;
+        let vduBuffer = [];
+        let vduExpecting = 0;
+        let vduCommand = 0;
+        let vdu23SubCmd = 0;
+
+        // VDU command lengths (some vary based on args)
+        const vduCommandLengths = {
+            17: 1,   // COLOUR
+            18: 2,   // GCOL
+            // 23 handled specially - varies by sub-command
+            24: 8,   // Graphics window
+            25: 5,   // PLOT
+            26: 0,   // Reset viewport
+            28: 4,   // Text window
+            29: 4,   // Graphics origin
+            31: 2,   // TAB(x,y)
+        };
+
+        // VDU 23, 0, cmd argument counts
+        const vdu23SysCommandLengths = {
+            0x80: 1,  // VDP packet (we consume 1 more byte for sub-command)
+            0x81: 0,  // Get cursor position
+            0x82: 0,  // Get character
+            0x83: 4,  // Get pixel (x,y 16-bit)
+            0x84: 0,  // Audio status
+            0x85: 0,  // Mode info
+            0x86: 0,  // Screen dimensions
+            0x87: 0,  // RTC
+            0x88: 0,  // Keyboard layout
+            0x89: 1,  // UART
+            0x8A: 0,  // Keyboard repeat
+            0x94: 0,  // UDG info
+            0xFF: 0,  // Terminal mode
+        };
+
+        // Process UART output for terminal display
+        function processOutput(data) {
+            for (const byte of data) {
+                processByte(byte);
+            }
+        }
+
+        function processByte(byte) {
+            switch (vduState) {
+                case VDU_23_FIRST:
+                    // First byte after VDU 23
+                    if (byte === 0) {
+                        // VDU 23, 0 - system command
+                        vduState = VDU_23_SYSCMD;
+                    } else {
+                        // VDU 23, n - character definition (8 more bytes)
+                        vduState = VDU_COLLECTING;
+                        vduExpecting = 8;
+                        vduBuffer = [byte];
+                    }
+                    return;
+
+                case VDU_23_SYSCMD:
+                    // System command byte
+                    vdu23SubCmd = byte;
+                    const argCount = vdu23SysCommandLengths[byte] ?? 0;
+                    if (argCount > 0) {
+                        vduState = VDU_23_ARGS;
+                        vduExpecting = argCount;
+                        vduBuffer = [];
+                    } else {
+                        // No args, execute now
+                        handleVdpCommand(byte, []);
+                        vduState = VDU_IDLE;
+                    }
+                    return;
+
+                case VDU_23_ARGS:
+                    // Collecting system command arguments
+                    vduBuffer.push(byte);
+                    vduExpecting--;
+                    if (vduExpecting === 0) {
+                        handleVdpCommand(vdu23SubCmd, vduBuffer);
+                        vduBuffer = [];
+                        vduState = VDU_IDLE;
+                    }
+                    return;
+
+                case VDU_COLLECTING:
+                    // Collecting standard VDU command bytes
+                    vduBuffer.push(byte);
+                    vduExpecting--;
+                    if (vduExpecting === 0) {
+                        if (vduCommand === 31) {
+                            // TAB(x,y)
+                            vdpState.cursorX = vduBuffer[0];
+                            vdpState.cursorY = vduBuffer[1];
+                        }
+                        vduBuffer = [];
+                        vduState = VDU_IDLE;
+                    }
+                    return;
+            }
+
+            // VDU_IDLE - normal character processing
+            if (byte === 0x00) {
+                // NUL - ignore
+            } else if (byte === 0x07) {
+                // BEL - bell
+            } else if (byte === 0x08) {
+                // BS - backspace
+                term.write('\b');
+                if (vdpState.cursorX > 0) vdpState.cursorX--;
+            } else if (byte === 0x09) {
+                // TAB
+                term.write('\t');
+            } else if (byte === 0x0A) {
+                // LF - line feed
+                term.write('\n');
+                vdpState.cursorY++;
+            } else if (byte === 0x0C) {
+                // FF - form feed / clear screen
+                term.clear();
+                vdpState.cursorX = 0;
+                vdpState.cursorY = 0;
+            } else if (byte === 0x0D) {
+                // CR - carriage return
+                term.write('\r');
+                vdpState.cursorX = 0;
+            } else if (byte === 23) {
+                // VDU 23 - multi-byte, handled specially
+                vduCommand = 23;
+                vduState = VDU_23_FIRST;
+            } else if (byte >= 0x20 && byte < 0x7F) {
+                // Printable ASCII
+                term.write(String.fromCharCode(byte));
+                vdpState.cursorX++;
+            } else if (vduCommandLengths.hasOwnProperty(byte)) {
+                // Start of multi-byte VDU command
+                vduCommand = byte;
+                vduExpecting = vduCommandLengths[byte];
+                vduBuffer = [];
+                vduState = VDU_COLLECTING;
+            }
+            // Other single-byte VDU codes - ignored
+        }
+    </script>
+</body>
+</html>

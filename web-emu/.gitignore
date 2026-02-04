@@ -1,0 +1,5 @@
+# Generated WASM package (run wasm-pack build to regenerate)
+pkg/
+
+# Firmware (copy from sdcard/)
+MOS.bin
