@@ -146,19 +146,23 @@
                 if (response.ok) {
                     const data = await response.arrayBuffer();
                     const bytes = new Uint8Array(data);
+                    console.log('MOS.bin loaded:', bytes.length, 'bytes');
+                    console.log('First 16 bytes:', Array.from(bytes.slice(0, 16)).map(b => b.toString(16).padStart(2,'0')).join(' '));
                     emulator.load_mos(bytes);
                     status.textContent = `Status: Loaded MOS.bin (${bytes.length} bytes). Ready to start.`;
                     startBtn.disabled = false;
                     resetBtn.disabled = false;
                     term.clear();
-                    term.writeln('Auto-loaded MOS.bin');
+                    term.writeln(`Auto-loaded MOS.bin (${bytes.length} bytes)`);
                     term.writeln('Click Start to begin emulation.');
                 } else {
                     status.textContent = 'Status: WASM loaded. Load MOS firmware to begin.';
+                    term.writeln('MOS.bin not found - please load firmware manually');
                 }
             } catch (e) {
                 status.textContent = 'Status: WASM loaded. Load MOS firmware to begin.';
-                console.log('MOS.bin not available, user must load manually');
+                console.log('MOS.bin not available:', e);
+                term.writeln('MOS.bin not found - please load firmware manually');
             }
         }).catch(err => {
             status.textContent = 'Status: Error loading WASM: ' + err;
@@ -197,15 +201,8 @@
                 startBtn.textContent = 'Pause';
                 status.textContent = 'Status: Running';
 
-                // Send initial VDP ready signal
-                // MOS polls VDP with VDU 23,0,0x86 early in boot
-                // We preemptively send a "general poll" response
-                sendVdpResponse(0x00, [
-                    1,     // VDP protocol version
-                    80,    // Cols
-                    25,    // Rows
-                    0, 0, 0, 0, 0, 0  // Padding
-                ]);
+                // MOS will poll the VDP during boot - we respond to those queries
+                // No need to send anything preemptively
 
                 runEmulation();
             }
@@ -215,6 +212,10 @@
         resetBtn.addEventListener('click', () => {
             emulator.reset();
             term.clear();
+            // Reset VDU parser state
+            vduState = VDU_IDLE;
+            vduBuffer = [];
+            vduExpecting = 0;
             term.writeln('Emulator reset.');
             status.textContent = 'Status: Reset. Click Start to begin.';
             running = false;
@@ -241,6 +242,9 @@
         });
 
         // Main emulation loop
+        let frameCount = 0;
+        let totalOutput = 0;
+
         function runEmulation() {
             if (!running || !emulator) return;
 
@@ -248,15 +252,31 @@
             const cyclesPerFrame = 307200; // ~18.432 MHz / 60 fps
             emulator.run_cycles(cyclesPerFrame);
 
-            // Process output
+            // Process output - try raw mode first to debug
             const output = emulator.get_output();
             if (output.length > 0) {
-                // Parse VDU commands for basic terminal output
-                processOutput(output);
+                totalOutput += output.length;
+                // Debug: log raw bytes
+                console.log('UART TX:', Array.from(output).map(b => b.toString(16).padStart(2,'0')).join(' '));
+
+                // Simple raw output mode - just print printable chars
+                for (const byte of output) {
+                    if (byte >= 0x20 && byte < 0x7F) {
+                        term.write(String.fromCharCode(byte));
+                    } else if (byte === 0x0A || byte === 0x0D) {
+                        term.write(String.fromCharCode(byte));
+                    }
+                }
             }
 
-            // Update cycle counter
-            cyclesSpan.textContent = emulator.get_cycles().toLocaleString();
+            // Update cycle counter every 30 frames (~0.5 sec)
+            frameCount++;
+            if (frameCount >= 30) {
+                cyclesSpan.textContent = emulator.get_cycles().toLocaleString();
+                // Also show total output bytes
+                status.textContent = `Status: Running | Output bytes: ${totalOutput}`;
+                frameCount = 0;
+            }
 
             animationId = requestAnimationFrame(runEmulation);
         }
@@ -272,8 +292,9 @@
 
         // Send VDP response packet to emulator
         function sendVdpResponse(cmd, data) {
-            // VDP packet format: 0x80 + cmd, length, data...
-            emulator.send_byte(0x80 + cmd);
+            // VDP packet format: cmd, length, data...
+            console.log('VDP response:', cmd.toString(16), 'len:', data.length, 'data:', data.map(b => b.toString(16)).join(' '));
+            emulator.send_byte(cmd);
             emulator.send_byte(data.length);
             for (const byte of data) {
                 emulator.send_byte(byte);
@@ -282,11 +303,11 @@
 
         // Handle VDP system commands (VDU 23, 0, ...)
         function handleVdpCommand(cmd, args) {
+            console.log('handleVdpCommand:', cmd.toString(16), 'args:', args);
             switch (cmd) {
-                case 0x80: // General VDP packet command
-                    // Sub-command is in args[0]
+                case 0x80: // General poll - echo back the byte
                     if (args.length > 0) {
-                        handleVdpPacketCommand(args[0], args.slice(1));
+                        sendVdpResponse(0x80, [args[0]]);
                     }
                     break;
                 case 0x81: // Get cursor position
@@ -303,35 +324,23 @@
                     break;
                 case 0x85: // Get mode info
                     sendVdpResponse(0x85, [
-                        vdpState.screenWidth & 0xFF,
-                        (vdpState.screenWidth >> 8) & 0xFF,
-                        vdpState.screenHeight & 0xFF,
-                        (vdpState.screenHeight >> 8) & 0xFF,
-                        80, 25, // Cols, rows
-                        8, 16,  // Char width, height
-                        0, 64   // Colors, flags
+                        640 & 0xFF, (640 >> 8) & 0xFF,  // width
+                        400 & 0xFF, (400 >> 8) & 0xFF,  // height
+                        80, 25, 1  // cols, rows, mode
                     ]);
                     break;
-                case 0x86: // Get screen dimensions
+                case 0x86: // Get screen dimensions / mode info (same as CLI VDP)
                     sendVdpResponse(0x86, [
-                        vdpState.screenWidth & 0xFF,
-                        (vdpState.screenWidth >> 8) & 0xFF,
-                        vdpState.screenHeight & 0xFF,
-                        (vdpState.screenHeight >> 8) & 0xFF,
-                        80, 25  // Text cols/rows
+                        640 & 0xFF, (640 >> 8) & 0xFF,  // width 640
+                        400 & 0xFF, (400 >> 8) & 0xFF,  // height 400
+                        80, 25, 1  // cols, rows, mode
                     ]);
                     break;
                 case 0x87: // Get RTC
-                    sendVdpResponse(0x87, [
-                        vdpState.rtc.year & 0xFF,
-                        (vdpState.rtc.year >> 8) & 0xFF,
-                        vdpState.rtc.month,
-                        vdpState.rtc.day,
-                        0, // Day of week
-                        vdpState.rtc.hour,
-                        vdpState.rtc.minute,
-                        vdpState.rtc.second
-                    ]);
+                    if (args.length > 0 && args[0] === 0) {
+                        // Mode 0: return zeros (like CLI VDP)
+                        sendVdpResponse(0x87, [0, 0, 0, 0, 0, 0]);
+                    }
                     break;
                 case 0x88: // Get keyboard layout
                     sendVdpResponse(0x88, [0]); // UK layout
@@ -341,8 +350,11 @@
                     sendVdpResponse(cmd, [0]);
                     break;
                 case 0xFF: // Terminal mode switch
-                    // Acknowledge terminal mode
+                    console.log('Entering terminal mode');
+                    vdpState.terminalMode = true;
                     break;
+                default:
+                    console.log('Unknown VDP cmd:', cmd.toString(16));
             }
         }
 
@@ -365,27 +377,29 @@
 
         // VDU command lengths (some vary based on args)
         const vduCommandLengths = {
+            1: 1,    // Send next to printer only
             17: 1,   // COLOUR
             18: 2,   // GCOL
+            19: 5,   // Define palette
+            22: 1,   // MODE
             // 23 handled specially - varies by sub-command
             24: 8,   // Graphics window
             25: 5,   // PLOT
-            26: 0,   // Reset viewport
             28: 4,   // Text window
             29: 4,   // Graphics origin
             31: 2,   // TAB(x,y)
         };
 
-        // VDU 23, 0, cmd argument counts
+        // VDU 23, 0, cmd argument counts (must match what MOS sends)
         const vdu23SysCommandLengths = {
-            0x80: 1,  // VDP packet (we consume 1 more byte for sub-command)
+            0x80: 1,  // General poll - 1 byte echo value
             0x81: 0,  // Get cursor position
             0x82: 0,  // Get character
             0x83: 4,  // Get pixel (x,y 16-bit)
             0x84: 0,  // Audio status
             0x85: 0,  // Mode info
-            0x86: 0,  // Screen dimensions
-            0x87: 0,  // RTC
+            0x86: 0,  // Screen dimensions / mode info
+            0x87: 1,  // RTC - 1 byte mode
             0x88: 0,  // Keyboard layout
             0x89: 1,  // UART
             0x8A: 0,  // Keyboard repeat
@@ -418,6 +432,7 @@
                 case VDU_23_SYSCMD:
                     // System command byte
                     vdu23SubCmd = byte;
+                    console.log('VDU 23,0 cmd:', byte.toString(16));
                     const argCount = vdu23SysCommandLengths[byte] ?? 0;
                     if (argCount > 0) {
                         vduState = VDU_23_ARGS;

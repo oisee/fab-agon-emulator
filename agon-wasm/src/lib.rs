@@ -167,7 +167,7 @@ impl AgonEmulator {
 
         // Initialize CPU state
         cpu.state.set_pc(0x000000);
-        cpu.state.reg.set24(Reg16::SP, 0x00FFFF);
+        cpu.state.reg.set24(Reg16::SP, 0x0BFFFF); // Stack in RAM
         cpu.state.reg.adl = true; // 24-bit mode
 
         AgonEmulator {
@@ -252,7 +252,7 @@ impl AgonEmulator {
     #[wasm_bindgen]
     pub fn reset(&mut self) {
         self.cpu.state.set_pc(0x000000);
-        self.cpu.state.reg.set24(Reg16::SP, 0x00FFFF);
+        self.cpu.state.reg.set24(Reg16::SP, 0x0BFFFF); // Stack in RAM
         self.machine.uart_rx_fifo.clear();
         self.machine.uart_tx_fifo.clear();
         self.total_cycles = 0;
