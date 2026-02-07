@@ -13,3 +13,4 @@ agon-protocol = { path = "../agon-protocol" }
 libloading = "0.8"
 sdl3 = "0.14.36"
 sdl3-sys = "*"
+png = "0.17"

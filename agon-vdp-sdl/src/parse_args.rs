@@ -16,6 +16,8 @@ pub struct AppArgs {
     pub vdp_path: Option<PathBuf>,
     pub verbosity: Verbosity,
     pub fullscreen: bool,
+    pub dump_frames: Option<String>,
+    pub dump_keyframes: Option<String>,
 }
 
 pub fn parse_args() -> Result<AppArgs, String> {
@@ -26,6 +28,8 @@ pub fn parse_args() -> Result<AppArgs, String> {
         vdp_path: None,
         verbosity: Verbosity::Quiet,
         fullscreen: false,
+        dump_frames: None,
+        dump_keyframes: None,
     };
 
     let mut argv: Vec<String> = std::env::args().collect();
@@ -71,6 +75,18 @@ pub fn parse_args() -> Result<AppArgs, String> {
             "--fullscreen" => {
                 args.fullscreen = true;
             }
+            "--dump-frames" => {
+                if argv.is_empty() {
+                    return Err("--dump-frames requires a directory path".to_string());
+                }
+                args.dump_frames = Some(argv.remove(0));
+            }
+            "--dump-keyframes" => {
+                if argv.is_empty() {
+                    return Err("--dump-keyframes requires a directory path".to_string());
+                }
+                args.dump_keyframes = Some(argv.remove(0));
+            }
             other => {
                 return Err(format!("Unknown argument: {}", other));
             }
@@ -97,6 +113,8 @@ OPTIONS:
     -v                      Verbose output
     -vv                     Trace output (more verbose)
     --fullscreen            Start in fullscreen mode
+    --dump-frames <dir>     Save every frame as PNG on each vsync
+    --dump-keyframes <dir>  Save frame only when UART data arrived since last vsync
     -h, --help              Show this help
 
 EXAMPLES:

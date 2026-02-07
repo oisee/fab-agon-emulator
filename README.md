@@ -12,6 +12,7 @@ This project provides multiple emulator binaries:
 | `agon-cli-emulator` | Headless CLI emulator (combined eZ80+VDP) |
 | `agon-ez80` | Standalone eZ80 CPU (connects to external VDP) |
 | `agon-vdp-cli` | Text-only VDP server (for terminal use) |
+| `agon-vdp-sdl` | Graphical VDP server (SDL + VDP .so library) |
 
 The split architecture (`agon-ez80` + `agon-vdp-cli`) allows running the CPU and display on different machines or in different processes. See [Split VDP Architecture](./reports/2026-02-03-001-split-vdp-architecture.md) for details.
 
@@ -172,6 +173,20 @@ IO address are ignored. ie:
 
 will shut down the emulator.
 
+## Frame Dump (agon-vdp-sdl)
+
+For debugging VDP rendering, `agon-vdp-sdl` can capture framebuffer contents as PNG files:
+
+```bash
+# Save every frame on each vsync
+agon-vdp-sdl --dump-frames /tmp/frames
+
+# Save only frames where eZ80 sent UART data (keyframes)
+agon-vdp-sdl --dump-keyframes /tmp/keyframes
+```
+
+Output files are sequentially numbered: `frame_000001.png`, `frame_000002.png`, etc. See [Frame Dump Feature](./reports/2026-02-07-001-frame-dump-feature.md) for details.
+
 ## Other command-line options
 
 Read about other command-line options with:
@@ -187,6 +202,7 @@ agon-vdp-cli --help
 Technical reports and design documents are in the [reports/](./reports/) directory:
 
 - [Split VDP Architecture](./reports/2026-02-03-001-split-vdp-architecture.md) - Networked eZ80/VDP communication protocol
+- [Frame Dump Feature](./reports/2026-02-07-001-frame-dump-feature.md) - PNG frame capture for VDP debugging
 
 ## Submodules
 

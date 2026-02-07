@@ -229,6 +229,46 @@ fn main() {
     }
 }
 
+fn save_frame_png(dir: &str, frame_num: u64, buf: &[u8], w: u32, h: u32) {
+    use std::fs;
+    use std::io::BufWriter;
+    use std::path::Path;
+
+    let dir_path = Path::new(dir);
+    if !dir_path.exists() {
+        if let Err(e) = fs::create_dir_all(dir_path) {
+            eprintln!("Failed to create dump directory {}: {}", dir, e);
+            return;
+        }
+    }
+
+    let filename = dir_path.join(format!("frame_{:06}.png", frame_num));
+    let file = match fs::File::create(&filename) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Failed to create {}: {}", filename.display(), e);
+            return;
+        }
+    };
+    let writer = BufWriter::new(file);
+
+    let mut encoder = png::Encoder::new(writer, w, h);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+
+    match encoder.write_header() {
+        Ok(mut png_writer) => {
+            let row_bytes = w as usize * 3;
+            if let Err(e) = png_writer.write_image_data(&buf[..row_bytes * h as usize]) {
+                eprintln!("Failed to write PNG data: {}", e);
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to write PNG header: {}", e);
+        }
+    }
+}
+
 fn run_session(
     mut conn: SocketConnection,
     vdp: &VdpInterface,
@@ -299,6 +339,8 @@ fn run_session(
     let vsync_interval = Duration::from_micros(16666);
     let mut rctrl_pressed = false;
     let mut vsync_count: u64 = 0;
+    let mut uart_had_activity = false;
+    let mut dump_frame_num: u64 = 0;
 
     'running: loop {
         // Process SDL events
@@ -375,6 +417,7 @@ fn run_session(
                     for byte in data {
                         unsafe { (*vdp.z80_send_to_vdp)(byte) };
                     }
+                    uart_had_activity = true;
                 }
                 Message::Shutdown => {
                     if args.verbosity >= Verbosity::Verbose {
@@ -427,6 +470,20 @@ fn run_session(
                     vgabuf.as_mut_ptr(),
                     &mut frame_rate_hz,
                 );
+            }
+
+            // Dump frame if requested
+            if mode_w > 0 && mode_h > 0 {
+                let should_dump = args.dump_frames.is_some()
+                    || (args.dump_keyframes.is_some() && uart_had_activity);
+                if should_dump {
+                    dump_frame_num += 1;
+                    let dir = args.dump_frames.as_deref()
+                        .or(args.dump_keyframes.as_deref())
+                        .unwrap();
+                    save_frame_png(dir, dump_frame_num, &vgabuf, mode_w, mode_h);
+                }
+                uart_had_activity = false;
             }
 
             // Update texture and render
