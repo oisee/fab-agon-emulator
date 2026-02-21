@@ -156,6 +156,13 @@ fn main() {
     }
     eprintln!("VDP ready");
 
+    // Replay mode: feed VDU bytes from file instead of socket
+    if let Some(ref replay_path) = args.replay {
+        eprintln!("Replay mode: {}", replay_path.display());
+        run_replay_session(&vdp, &args, &mut event_pump, &mut canvas, &mut texture);
+        return;
+    }
+
     // Determine socket address
     let addr = if let Some(tcp) = &args.tcp_addr {
         SocketAddr::tcp(tcp.clone())
@@ -265,6 +272,234 @@ fn save_frame_png(dir: &str, frame_num: u64, buf: &[u8], w: u32, h: u32) {
         }
         Err(e) => {
             eprintln!("Failed to write PNG header: {}", e);
+        }
+    }
+}
+
+fn open_replay_log(path: &str) -> Box<dyn std::io::Write> {
+    if path == "-" {
+        Box::new(std::io::stderr())
+    } else {
+        match std::fs::File::create(path) {
+            Ok(f) => Box::new(std::io::BufWriter::new(f)),
+            Err(e) => {
+                eprintln!("Failed to open replay log '{}': {}", path, e);
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+fn run_replay_session(
+    vdp: &VdpInterface,
+    args: &parse_args::AppArgs,
+    event_pump: &mut sdl3::EventPump,
+    canvas: &mut sdl3::render::Canvas<sdl3::video::Window>,
+    texture: &mut sdl3::render::Texture,
+) {
+    use std::io::Read as _;
+    use std::io::Write as _;
+
+    let replay_path = args.replay.as_ref().unwrap();
+    let file_data = match std::fs::read(replay_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Failed to read replay file '{}': {}", replay_path.display(), e);
+            std::process::exit(1);
+        }
+    };
+
+    let fps = args.replay_fps.unwrap_or(60.0);
+    let vsync_interval = if fps > 0.0 {
+        Some(Duration::from_secs_f64(1.0 / fps))
+    } else {
+        None // max speed
+    };
+
+    let mut log: Option<Box<dyn std::io::Write>> = args.replay_log.as_deref().map(open_replay_log);
+    let start_time = Instant::now();
+
+    let mut vgabuf: Vec<u8> = vec![0u8; 1024 * 768 * 3];
+    let mut mode_w: u32 = 640;
+    let mut mode_h: u32 = 480;
+    let mut frame_rate_hz: f32 = 60.0;
+    let mut vsync_count: u64 = 0;
+    let mut dump_frame_num: u64 = 0;
+    let mut last_vsync = Instant::now();
+    let mut cursor = std::io::Cursor::new(&file_data);
+    let mut eof = false;
+    let mut eof_grace: u32 = 0; // vsyncs remaining after EOF before exit
+    const EOF_GRACE_FRAMES: u32 = 120; // ~2 seconds at 60fps
+
+    macro_rules! replay_log {
+        ($log:expr, $start:expr, $($arg:tt)*) => {
+            if let Some(ref mut w) = $log {
+                let elapsed = $start.elapsed().as_secs_f64();
+                let _ = write!(w, "[{:7.3}] ", elapsed);
+                let _ = writeln!(w, $($arg)*);
+            }
+        }
+    }
+
+    loop {
+        // Process SDL events
+        for event in event_pump.poll_iter() {
+            match event {
+                Event::Quit { .. } => return,
+                Event::KeyDown { keycode: Some(Keycode::Q), .. } => return,
+                _ => {}
+            }
+        }
+
+        // Check vsync timing
+        let do_vsync = match vsync_interval {
+            Some(interval) => last_vsync.elapsed() >= interval,
+            None => true,
+        };
+
+        if do_vsync && !eof {
+            // Feed next chunk to VDP
+            if args.replay_raw {
+                // Raw mode: feed everything at once on first vsync
+                if vsync_count == 0 {
+                    for &byte in file_data.iter() {
+                        unsafe { (*vdp.z80_send_to_vdp)(byte) };
+                    }
+                    replay_log!(log, start_time, "RAW: fed {} bytes", file_data.len());
+                }
+                eof = true;
+            } else {
+                // VSYNC-chunked: read [u16-LE length][data]
+                let mut len_buf = [0u8; 2];
+                match cursor.read_exact(&mut len_buf) {
+                    Ok(()) => {
+                        let chunk_len = u16::from_le_bytes(len_buf) as usize;
+                        if chunk_len == 0 {
+                            replay_log!(log, start_time, "EOF marker at byte {}", cursor.position());
+                            eof = true;
+                        } else {
+                            let pos = cursor.position() as usize;
+                            if pos + chunk_len > file_data.len() {
+                                replay_log!(log, start_time, "WARN: truncated chunk at byte {}", pos);
+                                eof = true;
+                            } else {
+                                for &byte in &file_data[pos..pos + chunk_len] {
+                                    // Respect CTS flow control (VDP may be busy)
+                                    let mut cts_waits = 0u32;
+                                    while !unsafe { (*vdp.z80_uart0_is_cts)() } {
+                                        cts_waits += 1;
+                                        if cts_waits > 1000 {
+                                            // VDP thread may need a vblank to make progress
+                                            unsafe { (*vdp.signal_vblank)() };
+                                            std::thread::sleep(Duration::from_micros(100));
+                                            cts_waits = 0;
+                                        } else {
+                                            std::thread::yield_now();
+                                        }
+                                    }
+                                    unsafe { (*vdp.z80_send_to_vdp)(byte) };
+                                }
+                                cursor.set_position((pos + chunk_len) as u64);
+                                replay_log!(log, start_time, "CHUNK: {} bytes at frame {}", chunk_len, vsync_count);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        replay_log!(log, start_time, "EOF (end of file)");
+                        eof = true;
+                    }
+                }
+            }
+
+            // Signal vblank
+            unsafe { (*vdp.signal_vblank)() };
+            vsync_count += 1;
+            replay_log!(log, start_time, "VSYNC #{}", vsync_count);
+
+            // Drain VDP→eZ80 responses (discard, but log them)
+            loop {
+                let mut byte: u8 = 0;
+                if unsafe { (*vdp.z80_recv_from_vdp)(&mut byte) } {
+                    replay_log!(log, start_time, "VDP->eZ80: 0x{:02X}", byte);
+                } else {
+                    break;
+                }
+            }
+
+            // Copy framebuffer
+            unsafe {
+                (*vdp.copyVgaFramebuffer)(
+                    &mut mode_w,
+                    &mut mode_h,
+                    vgabuf.as_mut_ptr(),
+                    &mut frame_rate_hz,
+                );
+            }
+
+            // Dump frame if requested
+            if mode_w > 0 && mode_h > 0 {
+                if args.dump_frames.is_some() || args.dump_keyframes.is_some() {
+                    dump_frame_num += 1;
+                    if args.frame_spec.includes(dump_frame_num) {
+                        let dir = args.dump_frames.as_deref()
+                            .or(args.dump_keyframes.as_deref())
+                            .unwrap();
+                        save_frame_png(dir, dump_frame_num, &vgabuf, mode_w, mode_h);
+                    }
+                }
+            }
+
+            // Render
+            if mode_w > 0 && mode_h > 0 {
+                let pitch = mode_w as usize * 3;
+                let _ = texture.update(
+                    sdl3::rect::Rect::new(0, 0, mode_w, mode_h),
+                    &vgabuf[..pitch * mode_h as usize],
+                    pitch,
+                );
+                let _ = canvas.clear();
+                let _ = canvas.copy(texture,
+                    sdl3::rect::Rect::new(0, 0, mode_w, mode_h),
+                    None);
+                canvas.present();
+            }
+
+            last_vsync = last_vsync
+                .checked_add(vsync_interval.unwrap_or(Duration::ZERO))
+                .unwrap_or_else(Instant::now);
+        } else if eof {
+            // After EOF, continue signaling vsyncs for grace period
+            // (lets VDP finish processing buffered commands / VSYNC callbacks)
+            eof_grace += 1;
+            if eof_grace > EOF_GRACE_FRAMES {
+                replay_log!(log, start_time, "EOF grace period done ({} vsyncs), exiting", EOF_GRACE_FRAMES);
+                return;
+            }
+            unsafe { (*vdp.signal_vblank)() };
+            unsafe {
+                (*vdp.copyVgaFramebuffer)(
+                    &mut mode_w,
+                    &mut mode_h,
+                    vgabuf.as_mut_ptr(),
+                    &mut frame_rate_hz,
+                );
+            }
+            if mode_w > 0 && mode_h > 0 {
+                let pitch = mode_w as usize * 3;
+                let _ = texture.update(
+                    sdl3::rect::Rect::new(0, 0, mode_w, mode_h),
+                    &vgabuf[..pitch * mode_h as usize],
+                    pitch,
+                );
+                let _ = canvas.clear();
+                let _ = canvas.copy(texture,
+                    sdl3::rect::Rect::new(0, 0, mode_w, mode_h),
+                    None);
+                canvas.present();
+            }
+            std::thread::sleep(Duration::from_millis(16));
+        } else {
+            std::thread::sleep(Duration::from_millis(1));
         }
     }
 }
@@ -478,10 +713,12 @@ fn run_session(
                     || (args.dump_keyframes.is_some() && uart_had_activity);
                 if should_dump {
                     dump_frame_num += 1;
-                    let dir = args.dump_frames.as_deref()
-                        .or(args.dump_keyframes.as_deref())
-                        .unwrap();
-                    save_frame_png(dir, dump_frame_num, &vgabuf, mode_w, mode_h);
+                    if args.frame_spec.includes(dump_frame_num) {
+                        let dir = args.dump_frames.as_deref()
+                            .or(args.dump_keyframes.as_deref())
+                            .unwrap();
+                        save_frame_png(dir, dump_frame_num, &vgabuf, mode_w, mode_h);
+                    }
                 }
                 uart_had_activity = false;
             }
