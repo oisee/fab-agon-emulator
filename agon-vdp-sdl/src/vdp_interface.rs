@@ -89,19 +89,29 @@ pub fn init(firmware_paths: &[std::path::PathBuf], verbose: bool) -> Option<VdpI
 pub fn default_firmware_paths(firmware: &str) -> Vec<std::path::PathBuf> {
     let prefix = option_env!("PREFIX");
 
-    let base_path = match prefix {
-        None => std::path::Path::new(".").join("firmware"),
-        Some(p) => Path::new(p).join("share").join("fab-agon-emulator"),
+    let mut base_paths = Vec::new();
+
+    // 1. CWD/firmware/ or PREFIX share dir
+    match prefix {
+        None => base_paths.push(std::path::Path::new(".").join("firmware")),
+        Some(p) => base_paths.push(Path::new(p).join("share").join("fab-agon-emulator")),
     };
 
+    // 2. Next to the executable itself (e.g. ~/.local/bin/../firmware/)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            base_paths.push(exe_dir.join("firmware"));
+            // Also check ../share/fab-agon-emulator/ relative to exe
+            base_paths.push(exe_dir.join("../share/fab-agon-emulator"));
+        }
+    }
+
     let mut paths = Vec::new();
-
-    // Try requested firmware first
-    paths.push(base_path.join(format!("vdp_{}.so", firmware)));
-
-    // Fall back to console8
-    if firmware != "console8" {
-        paths.push(base_path.join("vdp_console8.so"));
+    for base in &base_paths {
+        paths.push(base.join(format!("vdp_{}.so", firmware)));
+        if firmware != "console8" {
+            paths.push(base.join("vdp_console8.so"));
+        }
     }
 
     paths
