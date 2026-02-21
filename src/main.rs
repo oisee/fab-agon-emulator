@@ -76,7 +76,7 @@ pub fn main_loop() -> i32 {
         args.verbose,
     );
 
-    unsafe { (*vdp_interface.setVdpDebugLogging)(args.verbose) }
+    unsafe { (vdp_interface.setVdpDebugLogging)(args.verbose) }
 
     let (tx_cmd_debugger, rx_cmd_debugger): (Sender<DebugCmd>, Receiver<DebugCmd>) =
         mpsc::channel();
@@ -242,6 +242,7 @@ pub fn main_loop() -> i32 {
                         18_432_000
                     },
                     mos_bin: ez80_firmware,
+                    embedded_mos: Some(include_bytes!("../firmware/mos_console8.bin")),
                     interrupt_precision: if args.precise_interrupts { 1 } else { 16 },
                 });
                 machine.set_sdcard_directory(sdcard_dir);
@@ -311,10 +312,10 @@ pub fn main_loop() -> i32 {
         .name("VDP".to_string())
         .spawn(move || unsafe {
             if let Some(scr_mode) = args.scr_mode {
-                (*vdp_interface.set_startup_screen_mode)(scr_mode);
+                (vdp_interface.set_startup_screen_mode)(scr_mode);
             }
-            (*vdp_interface.vdp_setup)();
-            (*vdp_interface.vdp_loop)();
+            (vdp_interface.vdp_setup)();
+            (vdp_interface.vdp_loop)();
         });
 
     let mut screen_scale = args.screen_scale;
@@ -425,7 +426,7 @@ pub fn main_loop() -> i32 {
             }
             // signal vblank to VDP
             unsafe {
-                (*vdp_interface.signal_vblank)();
+                (vdp_interface.signal_vblank)();
             }
 
             // shutdown if requested (atomic could be set from the debugger)
@@ -441,8 +442,8 @@ pub fn main_loop() -> i32 {
                             let vk = ascii2vk::ascii2vk(b);
                             if vk > 0 {
                                 unsafe {
-                                    (*vdp_interface.sendVKeyEventToFabgl)(vk, 1);
-                                    (*vdp_interface.sendVKeyEventToFabgl)(vk, 0);
+                                    (vdp_interface.sendVKeyEventToFabgl)(vk, 1);
+                                    (vdp_interface.sendVKeyEventToFabgl)(vk, 0);
                                 }
                             }
                         }
@@ -472,8 +473,8 @@ pub fn main_loop() -> i32 {
                                 Some(sdl3::keyboard::Keycode::C) => {
                                     // caps-lock
                                     unsafe {
-                                        (*vdp_interface.sendPS2KbEventToFabgl)(0x58, 1);
-                                        (*vdp_interface.sendPS2KbEventToFabgl)(0x58, 0);
+                                        (vdp_interface.sendPS2KbEventToFabgl)(0x58, 1);
+                                        (vdp_interface.sendPS2KbEventToFabgl)(0x58, 0);
                                     }
                                     true
                                 }
@@ -483,7 +484,7 @@ pub fn main_loop() -> i32 {
                                 }
                                 Some(sdl3::keyboard::Keycode::M) => {
                                     unsafe {
-                                        (*vdp_interface.dump_vdp_mem_stats)();
+                                        (vdp_interface.dump_vdp_mem_stats)();
                                     }
                                     true
                                 }
@@ -519,7 +520,7 @@ pub fn main_loop() -> i32 {
                             if ps2scancode > 0 {
                                 if sdl2ps2::is_not_ascii(scancode.unwrap()) || !args.osk {
                                     unsafe {
-                                        (*vdp_interface.sendPS2KbEventToFabgl)(ps2scancode, 1);
+                                        (vdp_interface.sendPS2KbEventToFabgl)(ps2scancode, 1);
                                     }
                                 }
                             }
@@ -530,7 +531,7 @@ pub fn main_loop() -> i32 {
                             sdl2ps2::sdl2ps2(scancode.unwrap(), args.swap_caps_and_ctrl);
                         if ps2scancode > 0 {
                             unsafe {
-                                (*vdp_interface.sendPS2KbEventToFabgl)(ps2scancode, 0);
+                                (vdp_interface.sendPS2KbEventToFabgl)(ps2scancode, 0);
                             }
                         }
                     }
@@ -543,7 +544,7 @@ pub fn main_loop() -> i32 {
                         };
                         let packet: [u8; 4] = [8 | mouse_btn_state, 0, 0, 0];
                         unsafe {
-                            (*vdp_interface.sendHostMouseEventToFabgl)(&packet[0] as *const u8);
+                            (vdp_interface.sendHostMouseEventToFabgl)(&packet[0] as *const u8);
                         }
                     }
                     Event::MouseButtonDown { mouse_btn, .. } => {
@@ -555,14 +556,14 @@ pub fn main_loop() -> i32 {
                         };
                         let packet: [u8; 4] = [8 | mouse_btn_state, 0, 0, 0];
                         unsafe {
-                            (*vdp_interface.sendHostMouseEventToFabgl)(&packet[0] as *const u8);
+                            (vdp_interface.sendHostMouseEventToFabgl)(&packet[0] as *const u8);
                         }
                     }
                     Event::MouseWheel { y, .. } => {
                         let mut packet: [u8; 4] = [8 | mouse_btn_state, 0, 0, 0];
                         packet[3] = y as u8;
                         unsafe {
-                            (*vdp_interface.sendHostMouseEventToFabgl)(&packet[0] as *const u8);
+                            (vdp_interface.sendHostMouseEventToFabgl)(&packet[0] as *const u8);
                         }
                     }
                     Event::MouseMotion { xrel, yrel, .. } => {
@@ -580,7 +581,7 @@ pub fn main_loop() -> i32 {
                             packet[0] |= 0x20;
                         }
                         unsafe {
-                            (*vdp_interface.sendHostMouseEventToFabgl)(&packet[0] as *const u8);
+                            (vdp_interface.sendHostMouseEventToFabgl)(&packet[0] as *const u8);
                         }
                     }
                     Event::JoyHatMotion {
@@ -659,7 +660,7 @@ pub fn main_loop() -> i32 {
                 // otherwise show VDP image
                 if video_src == VideoSource::Vdp || got_gpio_vga_sync == 0 {
                     unsafe {
-                        (*vdp_interface.copyVgaFramebuffer)(
+                        (vdp_interface.copyVgaFramebuffer)(
                             &mut w as *mut u32,
                             &mut h as *mut u32,
                             &mut vgabuf[0] as *mut u8,
@@ -740,7 +741,7 @@ pub fn main_loop() -> i32 {
 
     // give vdp some time to shutdown
     unsafe {
-        (*vdp_interface.vdp_shutdown)();
+        (vdp_interface.vdp_shutdown)();
     }
     std::thread::sleep(std::time::Duration::from_millis(200));
 

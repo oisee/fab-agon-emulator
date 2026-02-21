@@ -221,6 +221,7 @@ fn main() {
                     18_432_000
                 },
                 mos_bin,
+                embedded_mos: Some(include_bytes!("../../firmware/mos_console8.bin")),
             });
 
             if let Some(f) = sdcard_img {

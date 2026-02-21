@@ -39,6 +39,7 @@ pub struct AgonMachine {
     gpios: Arc<gpio::GpioSet>,
     ram_init: RamInit,
     mos_bin: std::path::PathBuf,
+    embedded_mos: Option<&'static [u8]>,
     // CPU cycles elapsed before evaluating pending interrupts
     // and applying ticks to hardware (PRTs, uarts)
     interrupt_precision: i32,
@@ -494,6 +495,7 @@ pub struct AgonMachineConfig {
     pub clockspeed_hz: u64,
     pub ram_init: RamInit,
     pub mos_bin: std::path::PathBuf,
+    pub embedded_mos: Option<&'static [u8]>,
     pub gpios: Arc<gpio::GpioSet>,
     pub tx_gpio_vga_frame: std::sync::mpsc::Sender<gpio_video::GpioVgaFrame>,
     pub interrupt_precision: i32,
@@ -537,6 +539,7 @@ impl AgonMachine {
             total_cycles_elapsed: 0,
             paused: config.paused,
             mos_bin: config.mos_bin,
+            embedded_mos: config.embedded_mos,
             onchip_mem_enable: true,
             onchip_mem_segment: 0xff,
             flash_addr_u: 0,
@@ -613,9 +616,14 @@ impl AgonMachine {
     fn load_mos(&mut self) {
         let code = match std::fs::read(&self.mos_bin) {
             Ok(data) => data,
-            Err(e) => {
-                eprintln!("Error opening {}: {:?}", self.mos_bin.display(), e);
-                std::process::exit(-1);
+            Err(_) => {
+                if let Some(embedded) = self.embedded_mos {
+                    eprintln!("Firmware {} not found, using embedded firmware", self.mos_bin.display());
+                    embedded.to_vec()
+                } else {
+                    eprintln!("Error: firmware not found at {}", self.mos_bin.display());
+                    std::process::exit(-1);
+                }
             }
         };
 
